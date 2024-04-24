@@ -198,11 +198,11 @@ func NewJobPipelineV2(t testing.TB, cfg pipeline.BridgeConfig, jpcfg JobPipeline
 type TestApplication struct {
 	t testing.TB
 	*chainlink.ChainlinkApplication
-	Logger  logger.Logger
-	Server  *httptest.Server
-	Started bool
-	Backend *backends.SimulatedBackend
-	Keys    []ethkey.KeyV2
+	Logger      logger.Logger
+	Server      *httptest.Server
+	Started     bool
+	Backend     *backends.SimulatedBackend
+	Keys        []ethkey.KeyV2
 	MercuryPool *wsrpc.Pool
 }
 
@@ -449,7 +449,7 @@ func NewApplicationWithConfig(t testing.TB, cfg chainlink.GeneralConfig, flagsAn
 		t:                    t,
 		ChainlinkApplication: app,
 		Logger:               lggr,
-		MercuryPool: 		   &mercuryPool,
+		MercuryPool:          &mercuryPool,
 	}
 
 	srvr := httptest.NewUnstartedServer(web.Router(t, app, nil))
