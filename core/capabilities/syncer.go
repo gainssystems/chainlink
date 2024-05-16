@@ -113,7 +113,8 @@ func (s *registrySyncer) Start(ctx context.Context) error {
 	if slices.Contains(workflowDONPeers, myId) {
 		s.lggr.Info("member of a workflow DON - starting remote subscribers")
 		codec := streams.NewCodec()
-		aggregator := triggers.NewMercuryRemoteAggregator(codec, s.lggr)
+		// TODO (KS-196): validate reports
+		aggregator := triggers.NewMercuryRemoteAggregator(codec, nil, 0, s.lggr)
 		triggerCap := remote.NewTriggerSubscriber(config, triggerInfo, triggerCapabilityDonInfo, workflowDonInfo, s.dispatcher, aggregator, s.lggr)
 		err = s.registry.Add(ctx, triggerCap)
 		if err != nil {

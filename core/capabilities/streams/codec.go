@@ -8,9 +8,9 @@ import (
 type Codec struct {
 }
 
-func (c Codec) Unwrap(raw values.Value) ([]datastreams.FeedReport, error) {
+func (c Codec) UnwrapValid(wrapped values.Value, allowedSigners [][]byte, minRequiredSignatures int) ([]datastreams.FeedReport, error) {
 	dest := []datastreams.FeedReport{}
-	err := raw.UnwrapTo(&dest)
+	err := wrapped.UnwrapTo(&dest)
 	// TODO (KS-196): validate reports
 	return dest, err
 }
