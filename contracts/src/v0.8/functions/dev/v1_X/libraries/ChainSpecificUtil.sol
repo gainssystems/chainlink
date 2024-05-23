@@ -57,7 +57,7 @@ library ChainSpecificUtil {
       return
         ((calldataSizeBytes + DATA_PADDING_SIZE) * // full tx data size in bytes. Includes additional 140 bytes of "static data" (signature, etc.)
           (16 * l1BaseFeeScalar * l1BaseFeeWei + l1BlobBaseFeeScalar * l1BlobBaseFeeWei)) / (10 ** 6);
-        // Multiply by L1 price per byte and divide by 1e6 since the precision for the scalar values is 6 decimals.
+      // Multiply by L1 price per byte and divide by 1e6 since the precision for the scalar values is 6 decimals.
     }
     return 0;
   }
