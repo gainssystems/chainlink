@@ -7,14 +7,14 @@ import {L1Block} from "../../../../vendor/@eth-optimism/contracts-bedrock/v0.17.
 /// @dev A library that abstracts out opcodes that behave differently across chains.
 /// @dev The methods below return values that are pertinent to the given chain.
 library ChainSpecificUtil {
-  /// @dev DATA_PADDING_SIZE is the max size of the "static" data for the transaction which refers to the tx data that is not the calldata (signature, etc.)
-  uint256 private constant DATA_PADDING_SIZE = 140;
-
   // ------------ Start Arbitrum Constants ------------
   /// @dev ARBGAS_ADDR is the address of the ArbGasInfo precompile on Arbitrum.
   /// @dev reference: https://github.com/OffchainLabs/nitro/blob/v2.0.14/contracts/src/precompiles/ArbGasInfo.sol#L10
   address private constant ARBGAS_ADDR = address(0x000000000000000000000000000000000000006C);
   ArbGasInfo private constant ARBGAS = ArbGasInfo(ARBGAS_ADDR);
+  /// @dev ARB_DATA_PADDING_SIZE is the max size of the "static" data on Arbitrum for the transaction which refers to the tx data that is not the calldata (signature, etc.)
+  /// @dev reference: https://docs.arbitrum.io/build-decentralized-apps/how-to-estimate-gas#where-do-we-get-all-this-information-from
+  uint256 private constant ARB_DATA_PADDING_SIZE = 140;
 
   uint256 private constant ARB_MAINNET_CHAIN_ID = 42161;
   uint256 private constant ARB_GOERLI_TESTNET_CHAIN_ID = 421613;
@@ -26,6 +26,9 @@ library ChainSpecificUtil {
   /// @dev L1BLOCK_ADDR is the address of the L1Block precompile on Optimism.
   address private constant L1BLOCK_ADDR = address(0x4200000000000000000000000000000000000015);
   L1Block private constant L1BLOCK = L1Block(L1BLOCK_ADDR);
+  /// @dev OP_DATA_PADDING_SIZE is the max size of the "static" data on Optimism/Base for the transaction which refers to the tx data that is not the calldata (ie: signature)
+  /// @dev reference: https://github.com/ethereum-optimism/optimism/blob/bd7ceb02ec9f6ef2e3332cbb28201a12977f3b60/packages/contracts-bedrock/src/L2/GasPriceOracle.sol#L159
+  uint256 private constant OP_DATA_PADDING_SIZE = 68;
 
   uint256 private constant OP_MAINNET_CHAIN_ID = 10;
   uint256 private constant OP_GOERLI_CHAIN_ID = 420;
@@ -46,7 +49,7 @@ library ChainSpecificUtil {
     if (_isArbitrumChainId(chainid)) {
       // https://docs.arbitrum.io/build-decentralized-apps/how-to-estimate-gas#where-do-we-get-all-this-information-from
       (, uint256 l1PricePerByte, , , , ) = ARBGAS.getPricesInWei();
-      return l1PricePerByte * (calldataSizeBytes + DATA_PADDING_SIZE);
+      return l1PricePerByte * (calldataSizeBytes + ARB_DATA_PADDING_SIZE);
     } else if (_isOptimismChainId(chainid)) {
       // https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/exec-engine.md#ecotone-l1-cost-fee-changes-eip-4844-da
       // note we conservatively assume all non-zero bytes: tx_compressed_size = tx_data_size_bytes
@@ -55,7 +58,7 @@ library ChainSpecificUtil {
       uint256 l1BlobBaseFeeWei = L1BLOCK.blobBaseFee();
       uint256 l1BlobBaseFeeScalar = L1BLOCK.blobBaseFeeScalar();
       return
-        ((calldataSizeBytes + DATA_PADDING_SIZE) * // full tx data size in bytes. Includes additional 140 bytes of "static data" (signature, etc.)
+        ((calldataSizeBytes + OP_DATA_PADDING_SIZE) * // full tx data size in bytes with signature
           (16 * l1BaseFeeScalar * l1BaseFeeWei + l1BlobBaseFeeScalar * l1BlobBaseFeeWei)) / (10 ** 6);
       // Multiply by L1 price per byte and divide by 1e6 since the precision for the scalar values is 6 decimals.
     }

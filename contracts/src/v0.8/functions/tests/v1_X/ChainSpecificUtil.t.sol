@@ -112,8 +112,8 @@ contract ChainSpecificUtil__getL1FeeUpperLimit_Optimism is FunctionsFulfillmentS
   uint256 private constant L1_BLOB_BASE_FEE_WEI = 1;
   uint256 private constant L1_BLOB_BASE_FEE_SCALAR = 810_949;
 
-  uint256 private constant L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI = 1_712_892_116_931;
-  uint256 private constant L1_FEE_WEI = 988_391_529_658;
+  uint256 private constant L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI = 1_648_118_885_619;
+  uint256 private constant L1_FEE_WEI = 945_209_375_449;
 
   uint96 l1FeeEstimateJuels = uint96((1e18 * L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI) / uint256(LINK_ETH_RATE));
   uint96 l1FeeJuels = uint96((1e18 * L1_FEE_WEI) / uint256(LINK_ETH_RATE));
@@ -203,8 +203,8 @@ contract ChainSpecificUtil__getL1FeeUpperLimit_Base is FunctionsFulfillmentSetup
   uint256 private constant L1_BLOB_BASE_FEE_WEI = 1;
   uint256 private constant L1_BLOB_BASE_FEE_SCALAR = 659_851;
 
-  uint256 private constant L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI = 2_494_265_479_504;
-  uint256 private constant L1_FEE_WEI = 1_439_268_035_792;
+  uint256 private constant L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI = 2_399_944_515_993;
+  uint256 private constant L1_FEE_WEI = 1_376_387_393_452;
 
   uint96 l1FeeEstimateJuels = uint96((1e18 * L1_FEE_ESTIMATE_WITH_OVERESTIMATION_WEI) / uint256(LINK_ETH_RATE));
   uint96 l1FeeJuels = uint96((1e18 * L1_FEE_WEI) / uint256(LINK_ETH_RATE));
