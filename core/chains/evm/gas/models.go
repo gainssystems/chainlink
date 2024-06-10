@@ -271,12 +271,25 @@ func (e *evmFeeEstimator) GetFee(ctx context.Context, calldata []byte, feeLimit 
 		fee.DynamicTipCap = dynamicFee.TipCap
 		return
 	}
-
 	// get legacy fee
 	fee.Legacy, chainSpecificFeeLimit, err = e.EvmEstimator.GetLegacyGas(ctx, calldata, feeLimit, maxFeePrice, opts...)
 	if err != nil {
 		return
 	}
+
+	if e.geCfg.CostMax() != nil {
+		var totalGasCost uint64
+		totalGasCost, err = commonfee.ApplyMultiplier(fee.Legacy.ToInt().Uint64(), e.geCfg.LimitMultiplier())
+		if err != nil {
+			return
+		}
+		maxGasCost := e.geCfg.CostMax().ToInt().Uint64()
+		if totalGasCost > maxGasCost {
+			err = fmt.Errorf("estimated gas cost %d exceeds maximum allowed gas cost %d", totalGasCost, maxGasCost)
+			return
+		}
+	}
+
 	chainSpecificFeeLimit, err = commonfee.ApplyMultiplier(chainSpecificFeeLimit, e.geCfg.LimitMultiplier())
 
 	return
@@ -348,6 +361,7 @@ type GasEstimatorConfig interface {
 	BumpPercent() uint16
 	BumpThreshold() uint64
 	BumpMin() *assets.Wei
+	CostMax() *assets.Wei
 	FeeCapDefault() *assets.Wei
 	LimitMax() uint64
 	LimitMultiplier() float32
