@@ -51,7 +51,7 @@ type registrySyncer struct {
 var _ services.Service = &registrySyncer{}
 
 var (
-	defaultTickInterval = time.Duration(12 * time.Second)
+	defaultTickInterval = 12 * time.Second
 )
 
 var defaultStreamConfig = p2ptypes.StreamConfig{
