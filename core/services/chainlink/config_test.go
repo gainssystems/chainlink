@@ -114,7 +114,8 @@ var (
 						HTTPURL:  mustURL("http://broadcast.mirror"),
 						SendOnly: ptr(true),
 					},
-				}},
+				},
+			},
 			{
 				ChainID: ubig.NewI(42),
 				Chain: evmcfg.Chain{
@@ -127,7 +128,8 @@ var (
 						Name:  ptr("foo"),
 						WSURL: mustURL("wss://web.socket/test/foo"),
 					},
-				}},
+				},
+			},
 			{
 				ChainID: ubig.NewI(137),
 				Chain: evmcfg.Chain{
@@ -140,7 +142,8 @@ var (
 						Name:  ptr("bar"),
 						WSURL: mustURL("wss://web.socket/test/bar"),
 					},
-				}},
+				},
+			},
 		},
 		Cosmos: []*coscfg.TOMLConfig{
 			{
@@ -150,7 +153,8 @@ var (
 				},
 				Nodes: []*coscfg.Node{
 					{Name: ptr("primary"), TendermintURL: commoncfg.MustParseURL("http://columbus.cosmos.com")},
-				}},
+				},
+			},
 			{
 				ChainID: ptr("Malaga-420"),
 				Chain: coscfg.Chain{
@@ -158,7 +162,8 @@ var (
 				},
 				Nodes: []*coscfg.Node{
 					{Name: ptr("secondary"), TendermintURL: commoncfg.MustParseURL("http://bombay.cosmos.com")},
-				}},
+				},
+			},
 		},
 		Solana: []*solcfg.TOMLConfig{
 			{
@@ -294,11 +299,13 @@ func TestConfig_Marshal(t *testing.T) {
 		SendInterval: commoncfg.MustNewDuration(time.Minute),
 		SendTimeout:  commoncfg.MustNewDuration(5 * time.Second),
 		UseBatchSend: ptr(true),
-		Endpoints: []toml.TelemetryIngressEndpoint{{
-			Network:      ptr("EVM"),
-			ChainID:      ptr("1"),
-			ServerPubKey: ptr("test-pub-key"),
-			URL:          mustURL("prom.test")},
+		Endpoints: []toml.TelemetryIngressEndpoint{
+			{
+				Network:      ptr("EVM"),
+				ChainID:      ptr("1"),
+				ServerPubKey: ptr("test-pub-key"),
+				URL:          mustURL("prom.test"),
+			},
 		},
 	}
 
@@ -635,7 +642,8 @@ func TestConfig_Marshal(t *testing.T) {
 					HTTPURL:  mustURL("http://broadcast.mirror"),
 					SendOnly: ptr(true),
 				},
-			}},
+			},
+		},
 	}
 	full.Solana = []*solcfg.TOMLConfig{
 		{
@@ -1282,11 +1290,10 @@ func TestConfig_Validate(t *testing.T) {
 					- WSURL: missing: required for primary nodes
 					- HTTPURL: missing: required for all nodes
 				- 1.HTTPURL: missing: required for all nodes
-		- 1: 10 errors:
+		- 1: 9 errors:
 			- ChainType: invalid value (Foo): must not be set with this chain id
 			- Nodes: missing: must have at least one node
 			- ChainType: invalid value (Foo): must be one of arbitrum, celo, gnosis, kroma, metis, optimismBedrock, scroll, wemix, xlayer, zkevm, zksync or omitted
-			- HeadTracker.HistoryDepth: invalid value (30): must be equal to or greater than FinalityDepth
 			- GasEstimator.BumpThreshold: invalid value (0): cannot be 0 if auto-purge feature is enabled for Foo
 			- Transactions.AutoPurge.Threshold: missing: needs to be set if auto-purge feature is enabled for Foo
 			- Transactions.AutoPurge.MinAttempts: missing: needs to be set if auto-purge feature is enabled for Foo
@@ -1411,10 +1418,14 @@ func Test_generalConfig_LogConfiguration(t *testing.T) {
 		wantWarning   string
 	}{
 		{name: "empty", wantEffective: emptyEffectiveTOML, wantSecrets: emptyEffectiveSecretsTOML},
-		{name: "full", inputSecrets: secretsFullTOML, inputConfig: fullTOML,
-			wantConfig: fullTOML, wantEffective: fullTOML, wantSecrets: secretsFullRedactedTOML, wantWarning: deprecated},
-		{name: "multi-chain", inputSecrets: secretsMultiTOML, inputConfig: multiChainTOML,
-			wantConfig: multiChainTOML, wantEffective: multiChainEffectiveTOML, wantSecrets: secretsMultiRedactedTOML},
+		{
+			name: "full", inputSecrets: secretsFullTOML, inputConfig: fullTOML,
+			wantConfig: fullTOML, wantEffective: fullTOML, wantSecrets: secretsFullRedactedTOML, wantWarning: deprecated,
+		},
+		{
+			name: "multi-chain", inputSecrets: secretsMultiTOML, inputConfig: multiChainTOML,
+			wantConfig: multiChainTOML, wantEffective: multiChainEffectiveTOML, wantSecrets: secretsMultiRedactedTOML,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1510,14 +1521,17 @@ func TestSecrets_Validate(t *testing.T) {
 		toml string
 		exp  string
 	}{
-		{name: "partial",
+		{
+			name: "partial",
 			toml: `
 Database.AllowSimplePasswords = true`,
 			exp: `invalid secrets: 2 errors:
 	- Database.URL: empty: must be provided and non-empty
-	- Password.Keystore: empty: must be provided and non-empty`},
+	- Password.Keystore: empty: must be provided and non-empty`,
+		},
 
-		{name: "invalid-urls",
+		{
+			name: "invalid-urls",
 			toml: `[Database]
 URL = "postgresql://user:passlocalhost:5432/asdf"
 BackupURL = "foo-bar?password=asdf"
@@ -1543,14 +1557,17 @@ AllowSimplePasswords = false`,
 	Must not comprise:
 		Leading or trailing whitespace (note that a trailing newline in the password file, if present, will be ignored)
 	
-	- Password.Keystore: empty: must be provided and non-empty`},
+	- Password.Keystore: empty: must be provided and non-empty`,
+		},
 
-		{name: "invalid-urls-allowed",
+		{
+			name: "invalid-urls-allowed",
 			toml: `[Database]
 URL = "postgresql://user:passlocalhost:5432/asdf"
 BackupURL = "foo-bar?password=asdf"
 AllowSimplePasswords = true`,
-			exp: `invalid secrets: Password.Keystore: empty: must be provided and non-empty`},
+			exp: `invalid secrets: Password.Keystore: empty: must be provided and non-empty`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var s Secrets

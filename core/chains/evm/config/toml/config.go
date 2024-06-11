@@ -106,6 +106,7 @@ func (cs EVMConfigs) totalChains() int {
 	}
 	return total
 }
+
 func (cs EVMConfigs) Chains(ids ...string) (r []commontypes.ChainStatus, total int, err error) {
 	total = cs.totalChains()
 	for _, ch := range cs {
@@ -298,11 +299,15 @@ func (c *EVMConfig) ValidateConfig() (err error) {
 		is := c.ChainType.ChainType()
 		if is != must {
 			if must == "" {
-				err = multierr.Append(err, commonconfig.ErrInvalid{Name: "ChainType", Value: c.ChainType.ChainType(),
-					Msg: "must not be set with this chain id"})
+				err = multierr.Append(err, commonconfig.ErrInvalid{
+					Name: "ChainType", Value: c.ChainType.ChainType(),
+					Msg: "must not be set with this chain id",
+				})
 			} else {
-				err = multierr.Append(err, commonconfig.ErrInvalid{Name: "ChainType", Value: c.ChainType.ChainType(),
-					Msg: fmt.Sprintf("only %q can be used with this chain id", must)})
+				err = multierr.Append(err, commonconfig.ErrInvalid{
+					Name: "ChainType", Value: c.ChainType.ChainType(),
+					Msg: fmt.Sprintf("only %q can be used with this chain id", must),
+				})
 			}
 		}
 	}
@@ -319,8 +324,10 @@ func (c *EVMConfig) ValidateConfig() (err error) {
 			break
 		}
 		if !hasPrimary {
-			err = multierr.Append(err, commonconfig.ErrMissing{Name: "Nodes",
-				Msg: "must have at least one primary node with WSURL"})
+			err = multierr.Append(err, commonconfig.ErrMissing{
+				Name: "Nodes",
+				Msg:  "must have at least one primary node with WSURL",
+			})
 		}
 	}
 
@@ -372,25 +379,29 @@ type Chain struct {
 
 func (c *Chain) ValidateConfig() (err error) {
 	if !c.ChainType.ChainType().IsValid() {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "ChainType", Value: c.ChainType.ChainType(),
-			Msg: chaintype.ErrInvalidChainType.Error()})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "ChainType", Value: c.ChainType.ChainType(),
+			Msg: chaintype.ErrInvalidChainType.Error(),
+		})
 	}
 
 	if c.GasEstimator.BumpTxDepth != nil && *c.GasEstimator.BumpTxDepth > *c.Transactions.MaxInFlight {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "GasEstimator.BumpTxDepth", Value: *c.GasEstimator.BumpTxDepth,
-			Msg: "must be less than or equal to Transactions.MaxInFlight"})
-	}
-	if *c.HeadTracker.HistoryDepth < *c.FinalityDepth {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "HeadTracker.HistoryDepth", Value: *c.HeadTracker.HistoryDepth,
-			Msg: "must be equal to or greater than FinalityDepth"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "GasEstimator.BumpTxDepth", Value: *c.GasEstimator.BumpTxDepth,
+			Msg: "must be less than or equal to Transactions.MaxInFlight",
+		})
 	}
 	if *c.FinalityDepth < 1 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "FinalityDepth", Value: *c.FinalityDepth,
-			Msg: "must be greater than or equal to 1"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "FinalityDepth", Value: *c.FinalityDepth,
+			Msg: "must be greater than or equal to 1",
+		})
 	}
 	if *c.MinIncomingConfirmations < 1 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "MinIncomingConfirmations", Value: *c.MinIncomingConfirmations,
-			Msg: "must be greater than or equal to 1"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "MinIncomingConfirmations", Value: *c.MinIncomingConfirmations,
+			Msg: "must be greater than or equal to 1",
+		})
 	}
 
 	// AutoPurge configs depend on ChainType so handling validation on per chain basis
@@ -560,37 +571,53 @@ type GasEstimator struct {
 
 func (e *GasEstimator) ValidateConfig() (err error) {
 	if uint64(*e.BumpPercent) < legacypool.DefaultConfig.PriceBump {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "BumpPercent", Value: *e.BumpPercent,
-			Msg: fmt.Sprintf("may not be less than Geth's default of %d", legacypool.DefaultConfig.PriceBump)})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "BumpPercent", Value: *e.BumpPercent,
+			Msg: fmt.Sprintf("may not be less than Geth's default of %d", legacypool.DefaultConfig.PriceBump),
+		})
 	}
 	if e.TipCapDefault.Cmp(e.TipCapMin) < 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "TipCapDefault", Value: e.TipCapDefault,
-			Msg: "must be greater than or equal to TipCapMinimum"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "TipCapDefault", Value: e.TipCapDefault,
+			Msg: "must be greater than or equal to TipCapMinimum",
+		})
 	}
 	if e.FeeCapDefault.Cmp(e.TipCapDefault) < 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "FeeCapDefault", Value: e.TipCapDefault,
-			Msg: "must be greater than or equal to TipCapDefault"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "FeeCapDefault", Value: e.TipCapDefault,
+			Msg: "must be greater than or equal to TipCapDefault",
+		})
 	}
 	if *e.Mode == "FixedPrice" && *e.BumpThreshold == 0 && *e.EIP1559DynamicFees && e.FeeCapDefault.Cmp(e.PriceMax) != 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "FeeCapDefault", Value: e.FeeCapDefault,
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "FeeCapDefault", Value: e.FeeCapDefault,
 			Msg: fmt.Sprintf("must be equal to PriceMax (%s) since you are using FixedPrice estimation with gas bumping disabled in "+
-				"EIP1559 mode - PriceMax will be used as the FeeCap for transactions instead of FeeCapDefault", e.PriceMax)})
+				"EIP1559 mode - PriceMax will be used as the FeeCap for transactions instead of FeeCapDefault", e.PriceMax),
+		})
 	} else if e.FeeCapDefault.Cmp(e.PriceMax) > 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "FeeCapDefault", Value: e.FeeCapDefault,
-			Msg: fmt.Sprintf("must be less than or equal to PriceMax (%s)", e.PriceMax)})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "FeeCapDefault", Value: e.FeeCapDefault,
+			Msg: fmt.Sprintf("must be less than or equal to PriceMax (%s)", e.PriceMax),
+		})
 	}
 
 	if e.PriceMin.Cmp(e.PriceDefault) > 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "PriceMin", Value: e.PriceMin,
-			Msg: "must be less than or equal to PriceDefault"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "PriceMin", Value: e.PriceMin,
+			Msg: "must be less than or equal to PriceDefault",
+		})
 	}
 	if e.PriceMax.Cmp(e.PriceDefault) < 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "PriceMax", Value: e.PriceMin,
-			Msg: "must be greater than or equal to PriceDefault"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "PriceMax", Value: e.PriceMin,
+			Msg: "must be greater than or equal to PriceDefault",
+		})
 	}
 	if *e.Mode == "BlockHistory" && *e.BlockHistory.BlockHistorySize <= 0 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "BlockHistory.BlockHistorySize", Value: *e.BlockHistory.BlockHistorySize,
-			Msg: "must be greater than or equal to 1 with BlockHistory Mode"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "BlockHistory.BlockHistorySize", Value: *e.BlockHistory.BlockHistorySize,
+			Msg: "must be greater than or equal to 1 with BlockHistory Mode",
+		})
 	}
 
 	return
@@ -767,8 +794,10 @@ func (t *HeadTracker) setFrom(f *HeadTracker) {
 
 func (t *HeadTracker) ValidateConfig() (err error) {
 	if *t.MaxAllowedFinalityDepth < 1 {
-		err = multierr.Append(err, commonconfig.ErrInvalid{Name: "MaxAllowedFinalityDepth", Value: *t.MaxAllowedFinalityDepth,
-			Msg: "must be greater than or equal to 1"})
+		err = multierr.Append(err, commonconfig.ErrInvalid{
+			Name: "MaxAllowedFinalityDepth", Value: *t.MaxAllowedFinalityDepth,
+			Msg: "must be greater than or equal to 1",
+		})
 	}
 
 	return
