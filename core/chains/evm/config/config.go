@@ -45,6 +45,8 @@ type EVM interface {
 	OperatorFactoryAddress() string
 	RPCDefaultBatchSize() uint32
 	NodeNoNewHeadsThreshold() time.Duration
+	FinalizedBlockOffset() uint32
+	NoNewFinalizedHeadsThreshold() time.Duration
 
 	IsEnabled() bool
 	TOMLString() (string, error)
@@ -113,7 +115,6 @@ type AutoPurgeConfig interface {
 	DetectionApiUrl() *url.URL
 }
 
-//go:generate mockery --quiet --name GasEstimator --output ./mocks/ --case=underscore
 type GasEstimator interface {
 	BlockHistory() BlockHistory
 	LimitJobType() LimitJobType
@@ -170,11 +171,11 @@ type NodePool interface {
 	NodeIsSyncingEnabled() bool
 	FinalizedBlockPollInterval() time.Duration
 	Errors() ClientErrors
+	EnforceRepeatableRead() bool
+	DeathDeclarationDelay() time.Duration
 }
 
 // TODO BCF-2509 does the chainscopedconfig really need the entire app config?
-//
-//go:generate mockery --quiet --name ChainScopedConfig --output ./mocks/ --case=underscore
 type ChainScopedConfig interface {
 	EVM() EVM
 }

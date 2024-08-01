@@ -2,6 +2,7 @@ package capabilities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -9,12 +10,46 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
+var (
+	ErrCapabilityAlreadyExists = errors.New("capability already exists")
+)
+
+type metadataRegistry interface {
+	LocalNode(ctx context.Context) (capabilities.Node, error)
+	ConfigForCapability(ctx context.Context, capabilityID string, donID uint32) (capabilities.CapabilityConfiguration, error)
+}
+
 // Registry is a struct for the registry of capabilities.
 // Registry is safe for concurrent use.
 type Registry struct {
-	lggr logger.Logger
-	m    map[string]capabilities.BaseCapability
-	mu   sync.RWMutex
+	metadataRegistry metadataRegistry
+	lggr             logger.Logger
+	m                map[string]capabilities.BaseCapability
+	mu               sync.RWMutex
+}
+
+func (r *Registry) LocalNode(ctx context.Context) (capabilities.Node, error) {
+	if r.metadataRegistry == nil {
+		return capabilities.Node{}, errors.New("metadataRegistry information not available")
+	}
+
+	return r.metadataRegistry.LocalNode(ctx)
+}
+
+func (r *Registry) ConfigForCapability(ctx context.Context, capabilityID string, donID uint32) (capabilities.CapabilityConfiguration, error) {
+	if r.metadataRegistry == nil {
+		return capabilities.CapabilityConfiguration{}, errors.New("metadataRegistry information not available")
+	}
+
+	return r.metadataRegistry.ConfigForCapability(ctx, capabilityID, donID)
+}
+
+// SetLocalRegistry sets a local copy of the offchain registry for the registry to use.
+// This is only public for testing purposes; the only production use should be from the CapabilitiesLauncher.
+func (r *Registry) SetLocalRegistry(lr metadataRegistry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.metadataRegistry = lr
 }
 
 // Get gets a capability from the registry.
@@ -141,7 +176,7 @@ func (r *Registry) Add(ctx context.Context, c capabilities.BaseCapability) error
 	id := info.ID
 	_, ok := r.m[id]
 	if ok {
-		return fmt.Errorf("capability with id: %s already exists", id)
+		return fmt.Errorf("%w: id %s found in registry", ErrCapabilityAlreadyExists, id)
 	}
 
 	r.m[id] = c
@@ -153,6 +188,6 @@ func (r *Registry) Add(ctx context.Context, c capabilities.BaseCapability) error
 func NewRegistry(lggr logger.Logger) *Registry {
 	return &Registry{
 		m:    map[string]capabilities.BaseCapability{},
-		lggr: lggr.Named("CapabilityRegistry"),
+		lggr: lggr.Named("CapabilitiesRegistry"),
 	}
 }
