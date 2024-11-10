@@ -11,14 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/google/uuid"
-	"github.com/mitchellh/mapstructure"
 	pkgerrors "github.com/pkg/errors"
 	"gopkg.in/guregu/null.v4"
 
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
 	cutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
+
 	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/config"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	cnull "github.com/smartcontractkit/chainlink/v2/core/null"
@@ -29,6 +30,7 @@ const (
 	BlockhashStoreJobType          string = "blockhashstore"
 	BootstrapJobType               string = "bootstrap"
 	CronJobType                    string = "cron"
+	CCIPJobType                    string = "ccip"
 	DirectRequestJobType           string = "directrequest"
 	FluxMonitorJobType             string = "fluxmonitor"
 	GatewayJobType                 string = "gateway"
@@ -58,6 +60,8 @@ type (
 		TaskRetries() uint32
 		TaskMinBackoff() time.Duration
 		TaskMaxBackoff() time.Duration
+		TaskTags() string
+		GetDescendantTasks() []Task
 	}
 
 	Config interface {
@@ -259,6 +263,16 @@ func (trrs TaskRunResults) Terminals() (terminals []TaskRunResult) {
 		}
 	}
 	return
+}
+
+// GetNextTaskOf returns the task with the next id or nil if it does not exist
+func (trrs *TaskRunResults) GetTaskRunResultOf(task Task) *TaskRunResult {
+	for _, trr := range *trrs {
+		if trr.Task.Base().id == task.Base().id {
+			return &trr
+		}
+	}
+	return nil
 }
 
 // GetNextTaskOf returns the task with the next id or nil if it does not exist

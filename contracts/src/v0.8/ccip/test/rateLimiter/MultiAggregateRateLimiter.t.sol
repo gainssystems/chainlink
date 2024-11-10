@@ -2,68 +2,70 @@
 pragma solidity 0.8.24;
 
 import {AuthorizedCallers} from "../../../shared/access/AuthorizedCallers.sol";
+import {Ownable2Step} from "../../../shared/access/Ownable2Step.sol";
 import {MultiAggregateRateLimiter} from "../../MultiAggregateRateLimiter.sol";
 import {Client} from "../../libraries/Client.sol";
 import {Internal} from "../../libraries/Internal.sol";
 import {RateLimiter} from "../../libraries/RateLimiter.sol";
 import {BaseTest} from "../BaseTest.t.sol";
+
+import {FeeQuoterSetup} from "../feeQuoter/FeeQuoterSetup.t.sol";
 import {MultiAggregateRateLimiterHelper} from "../helpers/MultiAggregateRateLimiterHelper.sol";
-import {PriceRegistrySetup} from "../priceRegistry/PriceRegistry.t.sol";
 import {stdError} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
-contract MultiAggregateRateLimiterSetup is BaseTest, PriceRegistrySetup {
+contract MultiAggregateRateLimiterSetup is BaseTest, FeeQuoterSetup {
   MultiAggregateRateLimiterHelper internal s_rateLimiter;
 
-  address internal immutable TOKEN = 0x21118E64E1fB0c487F25Dd6d3601FF6af8D32E4e;
+  address internal constant TOKEN = 0x21118E64E1fB0c487F25Dd6d3601FF6af8D32E4e;
   uint224 internal constant TOKEN_PRICE = 4e18;
 
   uint64 internal constant CHAIN_SELECTOR_1 = 5009297550715157269;
   uint64 internal constant CHAIN_SELECTOR_2 = 4949039107694359620;
 
-  RateLimiter.Config internal RATE_LIMITER_CONFIG_1 = RateLimiter.Config({isEnabled: true, rate: 5, capacity: 100});
-  RateLimiter.Config internal RATE_LIMITER_CONFIG_2 = RateLimiter.Config({isEnabled: true, rate: 10, capacity: 200});
+  RateLimiter.Config internal s_rateLimiterConfig1 = RateLimiter.Config({isEnabled: true, rate: 5, capacity: 100});
+  RateLimiter.Config internal s_rateLimiterConfig2 = RateLimiter.Config({isEnabled: true, rate: 10, capacity: 200});
 
-  address internal immutable MOCK_OFFRAMP = address(1111);
-  address internal immutable MOCK_ONRAMP = address(1112);
+  address internal constant MOCK_OFFRAMP = address(1111);
+  address internal constant MOCK_ONRAMP = address(1112);
 
   address[] internal s_authorizedCallers;
 
-  function setUp() public virtual override(BaseTest, PriceRegistrySetup) {
+  function setUp() public virtual override(BaseTest, FeeQuoterSetup) {
     BaseTest.setUp();
-    PriceRegistrySetup.setUp();
+    FeeQuoterSetup.setUp();
 
-    Internal.PriceUpdates memory priceUpdates = getSingleTokenPriceUpdateStruct(TOKEN, TOKEN_PRICE);
-    s_priceRegistry.updatePrices(priceUpdates);
+    Internal.PriceUpdates memory priceUpdates = _getSingleTokenPriceUpdateStruct(TOKEN, TOKEN_PRICE);
+    s_feeQuoter.updatePrices(priceUpdates);
 
     MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
       new MultiAggregateRateLimiter.RateLimiterConfigArgs[](4);
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
     configUpdates[1] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_2,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_2
+      rateLimiterConfig: s_rateLimiterConfig2
     });
     configUpdates[2] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: true,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
     configUpdates[3] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_2,
       isOutboundLane: true,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_2
+      rateLimiterConfig: s_rateLimiterConfig2
     });
 
     s_authorizedCallers = new address[](2);
     s_authorizedCallers[0] = MOCK_OFFRAMP;
     s_authorizedCallers[1] = MOCK_ONRAMP;
 
-    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_priceRegistry), s_authorizedCallers);
+    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_feeQuoter), s_authorizedCallers);
     s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
   }
 
@@ -100,11 +102,9 @@ contract MultiAggregateRateLimiterSetup is BaseTest, PriceRegistrySetup {
     });
   }
 
-  function _generateAny2EVMMessageNoTokens(uint64 sourceChainSelector)
-    internal
-    pure
-    returns (Client.Any2EVMMessage memory)
-  {
+  function _generateAny2EVMMessageNoTokens(
+    uint64 sourceChainSelector
+  ) internal pure returns (Client.Any2EVMMessage memory) {
     return _generateAny2EVMMessage(sourceChainSelector, new Client.EVMTokenAmount[](0));
   }
 }
@@ -114,14 +114,14 @@ contract MultiAggregateRateLimiter_constructor is MultiAggregateRateLimiterSetup
     address[] memory authorizedCallers = new address[](0);
 
     vm.recordLogs();
-    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_priceRegistry), authorizedCallers);
+    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_feeQuoter), authorizedCallers);
 
-    // PriceRegistrySet
+    // FeeQuoterSet
     Vm.Log[] memory logEntries = vm.getRecordedLogs();
     assertEq(logEntries.length, 1);
 
     assertEq(OWNER, s_rateLimiter.owner());
-    assertEq(address(s_priceRegistry), s_rateLimiter.getPriceRegistry());
+    assertEq(address(s_feeQuoter), s_rateLimiter.getFeeQuoter());
   }
 
   function test_Constructor_Success() public {
@@ -130,70 +130,71 @@ contract MultiAggregateRateLimiter_constructor is MultiAggregateRateLimiterSetup
     authorizedCallers[1] = MOCK_ONRAMP;
 
     vm.expectEmit();
-    emit MultiAggregateRateLimiter.PriceRegistrySet(address(s_priceRegistry));
+    emit MultiAggregateRateLimiter.FeeQuoterSet(address(s_feeQuoter));
 
-    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_priceRegistry), authorizedCallers);
+    s_rateLimiter = new MultiAggregateRateLimiterHelper(address(s_feeQuoter), authorizedCallers);
 
     assertEq(OWNER, s_rateLimiter.owner());
-    assertEq(address(s_priceRegistry), s_rateLimiter.getPriceRegistry());
+    assertEq(address(s_feeQuoter), s_rateLimiter.getFeeQuoter());
+    assertEq(s_rateLimiter.typeAndVersion(), "MultiAggregateRateLimiter 1.6.0-dev");
   }
 }
 
-contract MultiAggregateRateLimiter_setPriceRegistry is MultiAggregateRateLimiterSetup {
+contract MultiAggregateRateLimiter_setFeeQuoter is MultiAggregateRateLimiterSetup {
   function test_Owner_Success() public {
     address newAddress = address(42);
 
     vm.expectEmit();
-    emit MultiAggregateRateLimiter.PriceRegistrySet(newAddress);
+    emit MultiAggregateRateLimiter.FeeQuoterSet(newAddress);
 
-    s_rateLimiter.setPriceRegistry(newAddress);
-    assertEq(newAddress, s_rateLimiter.getPriceRegistry());
+    s_rateLimiter.setFeeQuoter(newAddress);
+    assertEq(newAddress, s_rateLimiter.getFeeQuoter());
   }
 
   // Reverts
 
   function test_OnlyOwner_Revert() public {
     vm.startPrank(STRANGER);
-    vm.expectRevert(bytes("Only callable by owner"));
+    vm.expectRevert(Ownable2Step.OnlyCallableByOwner.selector);
 
-    s_rateLimiter.setPriceRegistry(STRANGER);
+    s_rateLimiter.setFeeQuoter(STRANGER);
   }
 
   function test_ZeroAddress_Revert() public {
     vm.expectRevert(AuthorizedCallers.ZeroAddressNotAllowed.selector);
-    s_rateLimiter.setPriceRegistry(address(0));
+    s_rateLimiter.setFeeQuoter(address(0));
   }
 }
 
 contract MultiAggregateRateLimiter_getTokenBucket is MultiAggregateRateLimiterSetup {
   function test_GetTokenBucket_Success() public view {
     RateLimiter.TokenBucket memory bucketInbound = s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, false);
-    _assertConfigWithTokenBucketEquality(RATE_LIMITER_CONFIG_1, bucketInbound);
+    _assertConfigWithTokenBucketEquality(s_rateLimiterConfig1, bucketInbound);
     assertEq(BLOCK_TIME, bucketInbound.lastUpdated);
 
     RateLimiter.TokenBucket memory bucketOutbound = s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, true);
-    _assertConfigWithTokenBucketEquality(RATE_LIMITER_CONFIG_1, bucketOutbound);
+    _assertConfigWithTokenBucketEquality(s_rateLimiterConfig1, bucketOutbound);
     assertEq(BLOCK_TIME, bucketOutbound.lastUpdated);
   }
 
   function test_Refill_Success() public {
-    RATE_LIMITER_CONFIG_1.capacity = RATE_LIMITER_CONFIG_1.capacity * 2;
+    s_rateLimiterConfig1.capacity = s_rateLimiterConfig1.capacity * 2;
 
     MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
       new MultiAggregateRateLimiter.RateLimiterConfigArgs[](1);
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
 
     s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
 
     RateLimiter.TokenBucket memory bucket = s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, false);
 
-    assertEq(RATE_LIMITER_CONFIG_1.rate, bucket.rate);
-    assertEq(RATE_LIMITER_CONFIG_1.capacity, bucket.capacity);
-    assertEq(RATE_LIMITER_CONFIG_1.capacity / 2, bucket.tokens);
+    assertEq(s_rateLimiterConfig1.rate, bucket.rate);
+    assertEq(s_rateLimiterConfig1.capacity, bucket.capacity);
+    assertEq(s_rateLimiterConfig1.capacity / 2, bucket.tokens);
     assertEq(BLOCK_TIME, bucket.lastUpdated);
 
     uint256 warpTime = 4;
@@ -201,16 +202,16 @@ contract MultiAggregateRateLimiter_getTokenBucket is MultiAggregateRateLimiterSe
 
     bucket = s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, false);
 
-    assertEq(RATE_LIMITER_CONFIG_1.rate, bucket.rate);
-    assertEq(RATE_LIMITER_CONFIG_1.capacity, bucket.capacity);
-    assertEq(RATE_LIMITER_CONFIG_1.capacity / 2 + warpTime * RATE_LIMITER_CONFIG_1.rate, bucket.tokens);
+    assertEq(s_rateLimiterConfig1.rate, bucket.rate);
+    assertEq(s_rateLimiterConfig1.capacity, bucket.capacity);
+    assertEq(s_rateLimiterConfig1.capacity / 2 + warpTime * s_rateLimiterConfig1.rate, bucket.tokens);
     assertEq(BLOCK_TIME + warpTime, bucket.lastUpdated);
 
     vm.warp(BLOCK_TIME + warpTime * 100);
 
     // Bucket overflow
     bucket = s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, false);
-    assertEq(RATE_LIMITER_CONFIG_1.capacity, bucket.tokens);
+    assertEq(s_rateLimiterConfig1.capacity, bucket.tokens);
   }
 
   // Reverts
@@ -241,7 +242,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1 + 1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
 
     vm.expectEmit();
@@ -267,7 +268,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1 + 1,
       isOutboundLane: true,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_2
+      rateLimiterConfig: s_rateLimiterConfig2
     });
 
     vm.expectEmit();
@@ -355,7 +356,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_2
+      rateLimiterConfig: s_rateLimiterConfig2
     });
 
     RateLimiter.TokenBucket memory bucket1 =
@@ -381,7 +382,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
 
     // Outbound lane config remains unchanged
     _assertConfigWithTokenBucketEquality(
-      RATE_LIMITER_CONFIG_1, s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, true)
+      s_rateLimiterConfig1, s_rateLimiter.currentRateLimiterState(CHAIN_SELECTOR_1, true)
     );
   }
 
@@ -391,7 +392,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
 
     RateLimiter.TokenBucket memory bucketPreUpdate =
@@ -419,7 +420,7 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: 0,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
 
     vm.expectRevert(MultiAggregateRateLimiter.ZeroChainSelectorNotAllowed.selector);
@@ -432,11 +433,71 @@ contract MultiAggregateRateLimiter_applyRateLimiterConfigUpdates is MultiAggrega
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1 + 1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
     vm.startPrank(STRANGER);
 
-    vm.expectRevert(bytes("Only callable by owner"));
+    vm.expectRevert(Ownable2Step.OnlyCallableByOwner.selector);
+    s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
+  }
+
+  function test_ConfigRateMoreThanCapacity_Revert() public {
+    MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
+      new MultiAggregateRateLimiter.RateLimiterConfigArgs[](1);
+    configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
+      remoteChainSelector: CHAIN_SELECTOR_1 + 1,
+      isOutboundLane: false,
+      rateLimiterConfig: RateLimiter.Config({isEnabled: true, rate: 100, capacity: 100})
+    });
+
+    vm.expectRevert(
+      abi.encodeWithSelector(RateLimiter.InvalidRateLimitRate.selector, configUpdates[0].rateLimiterConfig)
+    );
+    s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
+  }
+
+  function test_ConfigRateZero_Revert() public {
+    MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
+      new MultiAggregateRateLimiter.RateLimiterConfigArgs[](1);
+    configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
+      remoteChainSelector: CHAIN_SELECTOR_1 + 1,
+      isOutboundLane: false,
+      rateLimiterConfig: RateLimiter.Config({isEnabled: true, rate: 0, capacity: 100})
+    });
+
+    vm.expectRevert(
+      abi.encodeWithSelector(RateLimiter.InvalidRateLimitRate.selector, configUpdates[0].rateLimiterConfig)
+    );
+    s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
+  }
+
+  function test_DisableConfigRateNonZero_Revert() public {
+    MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
+      new MultiAggregateRateLimiter.RateLimiterConfigArgs[](1);
+    configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
+      remoteChainSelector: CHAIN_SELECTOR_1 + 1,
+      isOutboundLane: false,
+      rateLimiterConfig: RateLimiter.Config({isEnabled: false, rate: 5, capacity: 100})
+    });
+
+    vm.expectRevert(
+      abi.encodeWithSelector(RateLimiter.DisabledNonZeroRateLimit.selector, configUpdates[0].rateLimiterConfig)
+    );
+    s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
+  }
+
+  function test_DiableConfigCapacityNonZero_Revert() public {
+    MultiAggregateRateLimiter.RateLimiterConfigArgs[] memory configUpdates =
+      new MultiAggregateRateLimiter.RateLimiterConfigArgs[](1);
+    configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
+      remoteChainSelector: CHAIN_SELECTOR_1 + 1,
+      isOutboundLane: false,
+      rateLimiterConfig: RateLimiter.Config({isEnabled: false, rate: 0, capacity: 100})
+    });
+
+    vm.expectRevert(
+      abi.encodeWithSelector(RateLimiter.DisabledNonZeroRateLimit.selector, configUpdates[0].rateLimiterConfig)
+    );
     s_rateLimiter.applyRateLimiterConfigUpdates(configUpdates);
   }
 }
@@ -482,14 +543,14 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[0]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[0]))
+      remoteToken: abi.encode(s_sourceTokens[0])
     });
     adds[1] = MultiAggregateRateLimiter.RateLimitTokenArgs({
       localTokenArgs: MultiAggregateRateLimiter.LocalRateLimitToken({
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[1]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[1]))
+      remoteToken: abi.encode(s_sourceTokens[1])
     });
 
     for (uint256 i = 0; i < adds.length; ++i) {
@@ -501,8 +562,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
 
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), adds);
 
-    (address[] memory localTokens, bytes32[] memory remoteTokens) =
-      s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
+    (address[] memory localTokens, bytes[] memory remoteTokens) = s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
 
     assertEq(localTokens.length, adds.length);
     assertEq(localTokens.length, remoteTokens.length);
@@ -520,14 +580,14 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[0]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[0]))
+      remoteToken: abi.encode(s_sourceTokens[0])
     });
     adds[1] = MultiAggregateRateLimiter.RateLimitTokenArgs({
       localTokenArgs: MultiAggregateRateLimiter.LocalRateLimitToken({
         remoteChainSelector: CHAIN_SELECTOR_2,
         localToken: s_destTokens[1]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[1]))
+      remoteToken: abi.encode(s_sourceTokens[1])
     });
 
     for (uint256 i = 0; i < adds.length; ++i) {
@@ -539,7 +599,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
 
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), adds);
 
-    (address[] memory localTokensChain1, bytes32[] memory remoteTokensChain1) =
+    (address[] memory localTokensChain1, bytes[] memory remoteTokensChain1) =
       s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
 
     assertEq(localTokensChain1.length, 1);
@@ -547,7 +607,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
     assertEq(localTokensChain1[0], adds[0].localTokenArgs.localToken);
     assertEq(remoteTokensChain1[0], adds[0].remoteToken);
 
-    (address[] memory localTokensChain2, bytes32[] memory remoteTokensChain2) =
+    (address[] memory localTokensChain2, bytes[] memory remoteTokensChain2) =
       s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_2);
 
     assertEq(localTokensChain2.length, 1);
@@ -563,14 +623,14 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[0]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[0]))
+      remoteToken: abi.encode(s_sourceTokens[0])
     });
     adds[1] = MultiAggregateRateLimiter.RateLimitTokenArgs({
       localTokenArgs: MultiAggregateRateLimiter.LocalRateLimitToken({
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[1]
       }),
-      remoteToken: bytes32(bytes20(s_sourceTokens[1]))
+      remoteToken: abi.encode(s_sourceTokens[1])
     });
 
     MultiAggregateRateLimiter.LocalRateLimitToken[] memory removes =
@@ -593,8 +653,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
 
     s_rateLimiter.updateRateLimitTokens(removes, new MultiAggregateRateLimiter.RateLimitTokenArgs[](0));
 
-    (address[] memory localTokens, bytes32[] memory remoteTokens) =
-      s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
+    (address[] memory localTokens, bytes[] memory remoteTokens) = s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
 
     assertEq(1, remoteTokens.length);
     assertEq(adds[1].remoteToken, remoteTokens[0]);
@@ -620,8 +679,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
     Vm.Log[] memory logEntries = vm.getRecordedLogs();
     assertEq(logEntries.length, 0);
 
-    (address[] memory localTokens, bytes32[] memory remoteTokens) =
-      s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
+    (address[] memory localTokens, bytes[] memory remoteTokens) = s_rateLimiter.getAllRateLimitTokens(CHAIN_SELECTOR_1);
 
     assertEq(localTokens.length, 0);
     assertEq(localTokens.length, remoteTokens.length);
@@ -636,7 +694,7 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: s_destTokens[0]
       }),
-      remoteToken: bytes32(bytes20(address(0)))
+      remoteToken: new bytes(0)
     });
 
     vm.expectRevert(AuthorizedCallers.ZeroAddressNotAllowed.selector);
@@ -650,7 +708,21 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
         remoteChainSelector: CHAIN_SELECTOR_1,
         localToken: address(0)
       }),
-      remoteToken: bytes32(bytes20(s_destTokens[0]))
+      remoteToken: abi.encode(s_destTokens[0])
+    });
+
+    vm.expectRevert(AuthorizedCallers.ZeroAddressNotAllowed.selector);
+    s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), adds);
+  }
+
+  function test_ZeroDestToken_AbiEncoded_Revert() public {
+    MultiAggregateRateLimiter.RateLimitTokenArgs[] memory adds = new MultiAggregateRateLimiter.RateLimitTokenArgs[](1);
+    adds[0] = MultiAggregateRateLimiter.RateLimitTokenArgs({
+      localTokenArgs: MultiAggregateRateLimiter.LocalRateLimitToken({
+        remoteChainSelector: CHAIN_SELECTOR_1,
+        localToken: address(0)
+      }),
+      remoteToken: abi.encode(address(0))
     });
 
     vm.expectRevert(AuthorizedCallers.ZeroAddressNotAllowed.selector);
@@ -662,13 +734,13 @@ contract MultiAggregateRateLimiter_updateRateLimitTokens is MultiAggregateRateLi
 
     vm.startPrank(STRANGER);
 
-    vm.expectRevert(bytes("Only callable by owner"));
+    vm.expectRevert(Ownable2Step.OnlyCallableByOwner.selector);
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), adds);
   }
 }
 
 contract MultiAggregateRateLimiter_onInboundMessage is MultiAggregateRateLimiterSetup {
-  address internal immutable MOCK_RECEIVER = address(1113);
+  address internal constant MOCK_RECEIVER = address(1113);
 
   function setUp() public virtual override {
     super.setUp();
@@ -681,12 +753,12 @@ contract MultiAggregateRateLimiter_onInboundMessage is MultiAggregateRateLimiter
           remoteChainSelector: CHAIN_SELECTOR_1,
           localToken: s_destTokens[i]
         }),
-        remoteToken: bytes32(bytes20(s_sourceTokens[i]))
+        remoteToken: abi.encode(s_sourceTokens[i])
       });
 
       Internal.PriceUpdates memory priceUpdates =
-        getSingleTokenPriceUpdateStruct(s_destTokens[i], TOKEN_PRICE * (i + 1));
-      s_priceRegistry.updatePrices(priceUpdates);
+        _getSingleTokenPriceUpdateStruct(s_destTokens[i], TOKEN_PRICE * (i + 1));
+      s_feeQuoter.updatePrices(priceUpdates);
     }
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
   }
@@ -743,7 +815,7 @@ contract MultiAggregateRateLimiter_onInboundMessage is MultiAggregateRateLimiter
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: false,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
     configUpdates[0].rateLimiterConfig.isEnabled = false;
 
@@ -771,7 +843,7 @@ contract MultiAggregateRateLimiter_onInboundMessage is MultiAggregateRateLimiter
           localToken: s_destTokens[i]
         }),
         // Create a remote token address that is different from CHAIN_SELECTOR_1
-        remoteToken: bytes32(uint256(uint160(s_sourceTokens[i])) + type(uint160).max + 1)
+        remoteToken: abi.encode(uint256(uint160(s_sourceTokens[i])) + type(uint160).max + 1)
       });
     }
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
@@ -820,7 +892,7 @@ contract MultiAggregateRateLimiter_onInboundMessage is MultiAggregateRateLimiter
         localToken: s_destTokens[0]
       }),
       // Create a remote token address that is different from CHAIN_SELECTOR_1
-      remoteToken: bytes32(uint256(uint160(s_sourceTokens[0])) + type(uint160).max + 1)
+      remoteToken: abi.encode(uint256(uint160(s_sourceTokens[0])) + type(uint160).max + 1)
     });
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
 
@@ -917,12 +989,12 @@ contract MultiAggregateRateLimiter_onOutboundMessage is MultiAggregateRateLimite
           remoteChainSelector: CHAIN_SELECTOR_1,
           localToken: s_sourceTokens[i]
         }),
-        remoteToken: bytes32(bytes20(s_destTokenBySourceToken[s_sourceTokens[i]]))
+        remoteToken: abi.encode(bytes20(s_destTokenBySourceToken[s_sourceTokens[i]]))
       });
 
       Internal.PriceUpdates memory priceUpdates =
-        getSingleTokenPriceUpdateStruct(s_sourceTokens[i], TOKEN_PRICE * (i + 1));
-      s_priceRegistry.updatePrices(priceUpdates);
+        _getSingleTokenPriceUpdateStruct(s_sourceTokens[i], TOKEN_PRICE * (i + 1));
+      s_feeQuoter.updatePrices(priceUpdates);
     }
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
   }
@@ -978,7 +1050,7 @@ contract MultiAggregateRateLimiter_onOutboundMessage is MultiAggregateRateLimite
     configUpdates[0] = MultiAggregateRateLimiter.RateLimiterConfigArgs({
       remoteChainSelector: CHAIN_SELECTOR_1,
       isOutboundLane: true,
-      rateLimiterConfig: RATE_LIMITER_CONFIG_1
+      rateLimiterConfig: s_rateLimiterConfig1
     });
     configUpdates[0].rateLimiterConfig.isEnabled = false;
 
@@ -1005,7 +1077,7 @@ contract MultiAggregateRateLimiter_onOutboundMessage is MultiAggregateRateLimite
           localToken: s_sourceTokens[i]
         }),
         // Create a remote token address that is different from CHAIN_SELECTOR_1
-        remoteToken: bytes32(uint256(uint160(s_destTokenBySourceToken[s_sourceTokens[i]])) + type(uint160).max + 1)
+        remoteToken: abi.encode(uint256(uint160(s_destTokenBySourceToken[s_sourceTokens[i]])) + type(uint160).max + 1)
       });
     }
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
@@ -1054,7 +1126,7 @@ contract MultiAggregateRateLimiter_onOutboundMessage is MultiAggregateRateLimite
         localToken: s_sourceTokens[0]
       }),
       // Create a remote token address that is different from CHAIN_SELECTOR_1
-      remoteToken: bytes32(uint256(uint160(s_destTokenBySourceToken[s_sourceTokens[0]])) + type(uint160).max + 1)
+      remoteToken: abi.encode(uint256(uint160(s_destTokenBySourceToken[s_sourceTokens[0]])) + type(uint160).max + 1)
     });
     s_rateLimiter.updateRateLimitTokens(new MultiAggregateRateLimiter.LocalRateLimitToken[](0), tokensToAdd);
 
@@ -1181,11 +1253,9 @@ contract MultiAggregateRateLimiter_onOutboundMessage is MultiAggregateRateLimite
     s_rateLimiter.onOutboundMessage(CHAIN_SELECTOR_1, _generateEVM2AnyMessageNoTokens());
   }
 
-  function _generateEVM2AnyMessage(Client.EVMTokenAmount[] memory tokenAmounts)
-    public
-    view
-    returns (Client.EVM2AnyMessage memory)
-  {
+  function _generateEVM2AnyMessage(
+    Client.EVMTokenAmount[] memory tokenAmounts
+  ) public view returns (Client.EVM2AnyMessage memory) {
     return Client.EVM2AnyMessage({
       receiver: abi.encode(OWNER),
       data: "",

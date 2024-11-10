@@ -27,12 +27,8 @@ gomod: ## Ensure chainlink's go dependencies are installed.
 	go mod download
 
 .PHONY: gomodtidy
-gomodtidy: ## Run go mod tidy on all modules.
-	go mod tidy
-	cd ./core/scripts && go mod tidy
-	cd ./integration-tests && go mod tidy
-	cd ./integration-tests/load && go mod tidy
-	cd ./dashboard-lib && go mod tidy
+gomodtidy: gomods ## Run go mod tidy on all modules.
+	gomods tidy
 
 .PHONY: docs
 docs: ## Install and run pkgsite to view Go docs
@@ -74,6 +70,16 @@ docker:
 	--build-arg COMMIT_SHA=$(COMMIT_SHA) \
 	-f core/chainlink.Dockerfile .
 
+.PHONY: docker-ccip ## Build the chainlink docker image
+docker-ccip:
+	docker buildx build \
+	--build-arg COMMIT_SHA=$(COMMIT_SHA) \
+	-f core/chainlink.Dockerfile . -t chainlink-ccip:latest
+
+	docker buildx build \
+	--build-arg COMMIT_SHA=$(COMMIT_SHA) \
+	-f ccip/ccip.Dockerfile .
+
 .PHONY: docker-plugins ## Build the chainlink-plugins docker image
 docker-plugins:
 	docker buildx build \
@@ -89,12 +95,8 @@ abigen: ## Build & install abigen.
 	./tools/bin/build_abigen
 
 .PHONY: generate
-generate: abigen codecgen mockery protoc ## Execute all go:generate commands.
-	go generate -x ./...
-	cd ./core/scripts && go generate -x ./...
-	cd ./integration-tests && go generate -x ./...
-	cd ./integration-tests/load && go generate -x ./...
-	cd ./dashboard-lib && go generate -x ./...
+generate: abigen codecgen mockery protoc gomods ## Execute all go:generate commands.
+	gomods -w go generate -x ./...
 	mockery
 
 .PHONY: rm-mocked
@@ -110,6 +112,10 @@ testscripts: chainlink-test ## Install and run testscript against testdata/scrip
 .PHONY: testscripts-update
 testscripts-update: ## Update testdata/scripts/* files via testscript.
 	make testscripts TS_FLAGS="-u"
+
+.PHONY: start-testdb
+start-testdb:
+	docker run --name test-db-core -p 5432:5432 -e POSTGRES_PASSWORD=postgres -d postgres
 
 .PHONY: setup-testdb
 setup-testdb: ## Setup the test database.
@@ -136,11 +142,11 @@ presubmit: ## Format go files and imports.
 
 .PHONY: gomods
 gomods: ## Install gomods
-	go install github.com/jmank88/gomods@v0.1.1
+	go install github.com/jmank88/gomods@v0.1.4
 
 .PHONY: mockery
 mockery: $(mockery) ## Install mockery.
-	go install github.com/vektra/mockery/v2@v2.43.2
+	go install github.com/vektra/mockery/v2@v2.46.3
 
 .PHONY: codecgen
 codecgen: $(codecgen) ## Install codecgen
@@ -168,26 +174,16 @@ config-docs: ## Generate core node configuration documentation
 .PHONY: golangci-lint
 golangci-lint: ## Run golangci-lint for all issues.
 	[ -d "./golangci-lint" ] || mkdir ./golangci-lint && \
-	docker run --rm -v $(shell pwd):/app -w /app golangci/golangci-lint:v1.59.1 golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 > ./golangci-lint/$(shell date +%Y-%m-%d_%H:%M:%S).txt
-
-
-GORELEASER_CONFIG ?= .goreleaser.yaml
-
-.PHONY: goreleaser-dev-build
-goreleaser-dev-build: ## Run goreleaser snapshot build
-	./tools/bin/goreleaser_wrapper build --snapshot --rm-dist --config ${GORELEASER_CONFIG}
-
-.PHONY: goreleaser-dev-release
-goreleaser-dev-release: ## run goreleaser snapshot release
-	./tools/bin/goreleaser_wrapper release --snapshot --rm-dist --config ${GORELEASER_CONFIG}
+	docker run --rm -v $(shell pwd):/app -w /app golangci/golangci-lint:v1.61.0 golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 | tee ./golangci-lint/$(shell date +%Y-%m-%d_%H:%M:%S).txt
 
 .PHONY: modgraph
 modgraph:
+	go install github.com/jmank88/modgraph@v0.1.0
 	./tools/bin/modgraph > go.md
 
 .PHONY: test-short
 test-short: ## Run 'go test -short' and suppress uninteresting output
-	go test -short ./... | grep -v "[no test files]" | grep -v "\(cached\)"
+	go test -short ./... | grep -v "no test files" | grep -v "\(cached\)"
 
 help:
 	@echo ""

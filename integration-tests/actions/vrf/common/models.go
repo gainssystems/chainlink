@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/smartcontractkit/chainlink/integration-tests/client"
+	"github.com/smartcontractkit/chainlink/deployment/environment/nodeclient"
 	"github.com/smartcontractkit/chainlink/integration-tests/contracts"
 	"github.com/smartcontractkit/chainlink/integration-tests/docker/test_env"
 	tc "github.com/smartcontractkit/chainlink/integration-tests/testconfig"
@@ -15,7 +15,7 @@ type VRFEncodedProvingKey [2]*big.Int
 
 // VRFV2PlusKeyData defines a jobs into and proving key info
 type VRFKeyData struct {
-	VRFKey            *client.VRFKey
+	VRFKey            *nodeclient.VRFKey
 	EncodedProvingKey VRFEncodedProvingKey
 	KeyHash           [32]byte
 	PubKeyCompressed  string
@@ -39,7 +39,7 @@ func (n VRFNodeType) Index() int {
 
 type VRFNode struct {
 	CLNode              *test_env.ClNode
-	Job                 *client.Job
+	Job                 *nodeclient.Job
 	TXKeyAddressStrings []string
 }
 
@@ -55,6 +55,7 @@ type VRFContracts struct {
 	VRFV2PlusConsumer      []contracts.VRFv2PlusLoadTestConsumer
 	LinkToken              contracts.LinkToken
 	MockETHLINKFeed        contracts.VRFMockETHLINKFeed
+	LinkNativeFeedAddress  string
 }
 
 type VRFOwnerConfig struct {

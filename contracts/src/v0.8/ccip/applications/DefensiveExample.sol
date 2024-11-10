@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.4;
 
 import {IRouterClient} from "../interfaces/IRouterClient.sol";
 
@@ -45,16 +45,12 @@ contract DefensiveExample is CCIPClientExample {
   /// never revert, all errors should be handled internally in this contract.
   /// @param message The message to process.
   /// @dev Extremely important to ensure only router calls this.
-  function ccipReceive(Client.Any2EVMMessage calldata message)
-    external
-    override
-    onlyRouter
-    validChain(message.sourceChainSelector)
-  {
+  function ccipReceive(
+    Client.Any2EVMMessage calldata message
+  ) external override onlyRouter validChain(message.sourceChainSelector) {
     try this.processMessage(message) {}
     catch (bytes memory err) {
-      // Could set different error codes based on the caught error. Each could be
-      // handled differently.
+      // Could set different error codes based on the caught error. Each could be handled differently.
       s_failedMessages.set(message.messageId, uint256(ErrorCode.BASIC));
       s_messageContents[message.messageId] = message;
       // Don't revert so CCIP doesn't revert. Emit event instead.
@@ -70,34 +66,31 @@ contract DefensiveExample is CCIPClientExample {
   /// @dev This example just sends the tokens to the owner of this contracts. More
   /// interesting functions could be implemented.
   /// @dev It has to be external because of the try/catch.
-  function processMessage(Client.Any2EVMMessage calldata message)
-    external
-    onlySelf
-    validChain(message.sourceChainSelector)
-  {
-    // Simulate a revert
+  function processMessage(
+    Client.Any2EVMMessage calldata message
+  ) external onlySelf validChain(message.sourceChainSelector) {
+    // Simulate a revert.
     if (s_simRevert) revert ErrorCase();
 
-    // Send tokens to the owner
+    // Send tokens to the owner.
     for (uint256 i = 0; i < message.destTokenAmounts.length; ++i) {
       IERC20(message.destTokenAmounts[i].token).safeTransfer(owner(), message.destTokenAmounts[i].amount);
     }
-    // Do other things that might revert
+    // Do other things that might revert.
   }
 
-  /// @notice This function is callable by the owner when a message has failed
-  /// to unblock the tokens that are associated with that message.
+  /// @notice This function is callable by the owner when a message has failed  to unblock the tokens
+  /// that are associated with that message.
   /// @dev This function is only callable by the owner.
   function retryFailedMessage(bytes32 messageId, address tokenReceiver) external onlyOwner {
     if (s_failedMessages.get(messageId) != uint256(ErrorCode.BASIC)) revert MessageNotFailed(messageId);
-    // Set the error code to 0 to disallow reentry and retry the same failed message
-    // multiple times.
+    // Set the error code to 0 to disallow reentry and retry the same failed message multiple times.
     s_failedMessages.set(messageId, uint256(ErrorCode.RESOLVED));
 
-    // Do stuff to retry message, potentially just releasing the associated tokens
+    // Do stuff to retry message, potentially just releasing the associated tokens.
     Client.Any2EVMMessage memory message = s_messageContents[messageId];
 
-    // send the tokens to the receiver as escape hatch
+    // send the tokens to the receiver as escape hatch.
     for (uint256 i = 0; i < message.destTokenAmounts.length; ++i) {
       IERC20(message.destTokenAmounts[i].token).safeTransfer(tokenReceiver, message.destTokenAmounts[i].amount);
     }
@@ -105,8 +98,10 @@ contract DefensiveExample is CCIPClientExample {
     emit MessageRecovered(messageId);
   }
 
-  // An example function to demonstrate recovery
-  function setSimRevert(bool simRevert) external onlyOwner {
+  // An example function to demonstrate recovery.
+  function setSimRevert(
+    bool simRevert
+  ) external onlyOwner {
     s_simRevert = simRevert;
   }
 

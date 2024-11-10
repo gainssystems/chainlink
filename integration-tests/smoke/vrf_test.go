@@ -9,20 +9,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/onsi/gomega"
 	"github.com/rs/zerolog"
-	"github.com/smartcontractkit/seth"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-testing-framework/logging"
-	seth_utils "github.com/smartcontractkit/chainlink-testing-framework/utils/seth"
-	"github.com/smartcontractkit/chainlink-testing-framework/utils/testcontext"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/logging"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/utils/testcontext"
+	"github.com/smartcontractkit/chainlink-testing-framework/seth"
 
+	"github.com/smartcontractkit/chainlink/deployment/environment/nodeclient"
 	"github.com/smartcontractkit/chainlink/integration-tests/actions"
 	"github.com/smartcontractkit/chainlink/integration-tests/actions/vrf/vrfv1"
-	"github.com/smartcontractkit/chainlink/integration-tests/client"
 	"github.com/smartcontractkit/chainlink/integration-tests/contracts"
 	ethcontracts "github.com/smartcontractkit/chainlink/integration-tests/contracts"
 	"github.com/smartcontractkit/chainlink/integration-tests/docker/test_env"
 	tc "github.com/smartcontractkit/chainlink/integration-tests/testconfig"
+	"github.com/smartcontractkit/chainlink/integration-tests/utils"
 )
 
 func TestVRFBasic(t *testing.T) {
@@ -36,12 +36,12 @@ func TestVRFBasic(t *testing.T) {
 		l.Debug().Interface("Key JSON", nodeKey).Msg("Created proving key")
 		pubKeyCompressed := nodeKey.Data.ID
 		jobUUID := uuid.New()
-		os := &client.VRFTxPipelineSpec{
+		os := &nodeclient.VRFTxPipelineSpec{
 			Address: vrfContracts.Coordinator.Address(),
 		}
 		ost, err := os.String()
 		require.NoError(t, err, "Building observation source spec shouldn't fail")
-		job, err := n.API.MustCreateJob(&client.VRFJobSpec{
+		job, err := n.API.MustCreateJob(&nodeclient.VRFJobSpec{
 			Name:                     fmt.Sprintf("vrf-%s", jobUUID),
 			CoordinatorAddress:       vrfContracts.Coordinator.Address(),
 			MinIncomingConfirmations: 1,
@@ -105,12 +105,12 @@ func TestVRFJobReplacement(t *testing.T) {
 		l.Debug().Interface("Key JSON", nodeKey).Msg("Created proving key")
 		pubKeyCompressed := nodeKey.Data.ID
 		jobUUID := uuid.New()
-		os := &client.VRFTxPipelineSpec{
+		os := &nodeclient.VRFTxPipelineSpec{
 			Address: contracts.Coordinator.Address(),
 		}
 		ost, err := os.String()
 		require.NoError(t, err, "Building observation source spec shouldn't fail")
-		job, err := n.API.MustCreateJob(&client.VRFJobSpec{
+		job, err := n.API.MustCreateJob(&nodeclient.VRFJobSpec{
 			Name:                     fmt.Sprintf("vrf-%s", jobUUID),
 			CoordinatorAddress:       contracts.Coordinator.Address(),
 			MinIncomingConfirmations: 1,
@@ -160,7 +160,7 @@ func TestVRFJobReplacement(t *testing.T) {
 		err = n.API.MustDeleteJob(job.Data.ID)
 		require.NoError(t, err)
 
-		job, err = n.API.MustCreateJob(&client.VRFJobSpec{
+		job, err = n.API.MustCreateJob(&nodeclient.VRFJobSpec{
 			Name:                     fmt.Sprintf("vrf-%s", jobUUID),
 			CoordinatorAddress:       contracts.Coordinator.Address(),
 			MinIncomingConfirmations: 1,
@@ -204,7 +204,7 @@ func prepareVRFtestEnv(t *testing.T, l zerolog.Logger) (*test_env.CLClusterTestE
 	evmNetwork, err := env.GetFirstEvmNetwork()
 	require.NoError(t, err, "Error getting first evm network")
 
-	sethClient, err := seth_utils.GetChainClient(config, *evmNetwork)
+	sethClient, err := utils.TestAwareSethClient(t, config, evmNetwork)
 	require.NoError(t, err, "Error getting seth client")
 
 	err = actions.FundChainlinkNodesFromRootAddress(l, sethClient, contracts.ChainlinkClientToChainlinkNodeWithKeysAndAddress(env.ClCluster.NodeAPIs()), big.NewFloat(*config.Common.ChainlinkNodeFunding))

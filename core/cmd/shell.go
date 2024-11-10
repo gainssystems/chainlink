@@ -23,14 +23,16 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/getsentry/sentry-go"
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/multierr"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/jmoiron/sqlx"
-
+	"github.com/smartcontractkit/chainlink-common/pkg/beholder"
 	"github.com/smartcontractkit/chainlink-common/pkg/loop"
 	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/mailbox"
@@ -43,6 +45,7 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/services"
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore"
+	"github.com/smartcontractkit/chainlink/v2/core/services/llo"
 	"github.com/smartcontractkit/chainlink/v2/core/services/periodicbackup"
 	"github.com/smartcontractkit/chainlink/v2/core/services/relay/evm/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink/v2/core/services/relay/evm/mercury/wsrpc/cache"
@@ -63,19 +66,62 @@ var (
 	grpcOpts        loop.GRPCOpts
 )
 
-func initGlobals(cfgProm config.Prometheus, cfgTracing config.Tracing, logger logger.Logger) error {
+func initGlobals(cfgProm config.Prometheus, cfgTracing config.Tracing, cfgTelemetry config.Telemetry, lggr logger.Logger, csaPubKeyHex string, beholderAuthHeaders map[string]string) error {
 	// Avoid double initializations, but does not prevent relay methods from being called multiple times.
 	var err error
 	initGlobalsOnce.Do(func() {
-		prometheus = ginprom.New(ginprom.Namespace("service"), ginprom.Token(cfgProm.AuthToken()))
-		grpcOpts = loop.NewGRPCOpts(nil) // default prometheus.Registerer
-		err = loop.SetupTracing(loop.TracingConfig{
-			Enabled:         cfgTracing.Enabled(),
-			CollectorTarget: cfgTracing.CollectorTarget(),
-			NodeAttributes:  cfgTracing.Attributes(),
-			SamplingRatio:   cfgTracing.SamplingRatio(),
-			OnDialError:     func(error) { logger.Errorw("Failed to dial", "err", err) },
-		})
+		err = func() error {
+			prometheus = ginprom.New(ginprom.Namespace("service"), ginprom.Token(cfgProm.AuthToken()))
+			grpcOpts = loop.NewGRPCOpts(nil) // default prometheus.Registerer
+
+			otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+				lggr.Errorw("Telemetry error", "err", err)
+			}))
+
+			tracingCfg := loop.TracingConfig{
+				Enabled:         cfgTracing.Enabled(),
+				CollectorTarget: cfgTracing.CollectorTarget(),
+				NodeAttributes:  cfgTracing.Attributes(),
+				SamplingRatio:   cfgTracing.SamplingRatio(),
+				TLSCertPath:     cfgTracing.TLSCertPath(),
+				OnDialError:     func(error) { lggr.Errorw("Failed to dial", "err", err) },
+			}
+			if !cfgTelemetry.Enabled() {
+				return loop.SetupTracing(tracingCfg)
+			}
+
+			var attributes []attribute.KeyValue
+			if tracingCfg.Enabled {
+				attributes = tracingCfg.Attributes()
+			}
+			for k, v := range cfgTelemetry.ResourceAttributes() {
+				attributes = append(attributes, attribute.String(k, v))
+			}
+
+			clientCfg := beholder.Config{
+				InsecureConnection:       cfgTelemetry.InsecureConnection(),
+				CACertFile:               cfgTelemetry.CACertFile(),
+				OtelExporterGRPCEndpoint: cfgTelemetry.OtelExporterGRPCEndpoint(),
+				ResourceAttributes:       attributes,
+				TraceSampleRatio:         cfgTelemetry.TraceSampleRatio(),
+				AuthPublicKeyHex:         csaPubKeyHex,
+				AuthHeaders:              beholderAuthHeaders,
+			}
+			if tracingCfg.Enabled {
+				clientCfg.TraceSpanExporter, err = tracingCfg.NewSpanExporter()
+				if err != nil {
+					return err
+				}
+			}
+			var beholderClient *beholder.Client
+			beholderClient, err = beholder.NewClient(clientCfg)
+			if err != nil {
+				return err
+			}
+			beholder.SetClient(beholderClient)
+			beholder.SetGlobalOtelProviders()
+			return nil
+		}()
 	})
 	return err
 }
@@ -130,19 +176,14 @@ func (s *Shell) configExitErr(validateFn func() error) cli.ExitCoder {
 
 // AppFactory implements the NewApplication method.
 type AppFactory interface {
-	NewApplication(ctx context.Context, cfg chainlink.GeneralConfig, appLggr logger.Logger, db *sqlx.DB) (chainlink.Application, error)
+	NewApplication(ctx context.Context, cfg chainlink.GeneralConfig, appLggr logger.Logger, db *sqlx.DB, keyStoreAuthenticator TerminalKeyStoreAuthenticator) (chainlink.Application, error)
 }
 
 // ChainlinkAppFactory is used to create a new Application.
 type ChainlinkAppFactory struct{}
 
 // NewApplication returns a new instance of the node with the given config.
-func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.GeneralConfig, appLggr logger.Logger, db *sqlx.DB) (app chainlink.Application, err error) {
-	err = initGlobals(cfg.Prometheus(), cfg.Tracing(), appLggr)
-	if err != nil {
-		appLggr.Errorf("Failed to initialize globals: %v", err)
-	}
-
+func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.GeneralConfig, appLggr logger.Logger, db *sqlx.DB, keyStoreAuthenticator TerminalKeyStoreAuthenticator) (app chainlink.Application, err error) {
 	err = migrate.SetMigrationENVVars(cfg)
 	if err != nil {
 		return nil, err
@@ -154,11 +195,31 @@ func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.G
 	}
 
 	ds := sqlutil.WrapDataSource(db, appLggr, sqlutil.TimeoutHook(cfg.Database().DefaultQueryTimeout), sqlutil.MonitorHook(cfg.Database().LogSQL))
-
 	keyStore := keystore.New(ds, utils.GetScryptParams(cfg), appLggr)
+
+	err = keyStoreAuthenticator.Authenticate(ctx, keyStore, cfg.Password())
+	if err != nil {
+		return nil, errors.Wrap(err, "error authenticating keystore")
+	}
+
+	err = keyStore.CSA().EnsureKey(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to ensure CSA key")
+	}
+
+	beholderAuthHeaders, csaPubKeyHex, err := keystore.BuildBeholderAuth(keyStore)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to build Beholder auth")
+	}
+
+	err = initGlobals(cfg.Prometheus(), cfg.Tracing(), cfg.Telemetry(), appLggr, csaPubKeyHex, beholderAuthHeaders)
+	if err != nil {
+		appLggr.Errorf("Failed to initialize globals: %v", err)
+	}
+
 	mailMon := mailbox.NewMonitor(cfg.AppID().String(), appLggr.Named("Mailbox"))
 
-	loopRegistry := plugins.NewLoopRegistry(appLggr, cfg.Tracing())
+	loopRegistry := plugins.NewLoopRegistry(appLggr, cfg.Tracing(), cfg.Telemetry(), beholderAuthHeaders, csaPubKeyHex)
 
 	mercuryPool := wsrpc.NewPool(appLggr, cache.Config{
 		LatestReportTTL:      cfg.Mercury().Cache().LatestReportTTL(),
@@ -168,13 +229,18 @@ func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.G
 
 	capabilitiesRegistry := capabilities.NewRegistry(appLggr)
 
+	retirementReportCache := llo.NewRetirementReportCache(appLggr, ds)
+
+	unrestrictedClient := clhttp.NewUnrestrictedHTTPClient()
 	// create the relayer-chain interoperators from application configuration
 	relayerFactory := chainlink.RelayerFactory{
-		Logger:               appLggr,
-		LoopRegistry:         loopRegistry,
-		GRPCOpts:             grpcOpts,
-		MercuryPool:          mercuryPool,
-		CapabilitiesRegistry: capabilitiesRegistry,
+		Logger:                appLggr,
+		LoopRegistry:          loopRegistry,
+		GRPCOpts:              grpcOpts,
+		MercuryPool:           mercuryPool,
+		CapabilitiesRegistry:  capabilitiesRegistry,
+		HTTPClient:            unrestrictedClient,
+		RetirementReportCache: retirementReportCache,
 	}
 
 	evmFactoryCfg := chainlink.EVMFactoryConfig{
@@ -208,6 +274,13 @@ func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.G
 		}
 		initOps = append(initOps, chainlink.InitStarknet(ctx, relayerFactory, starkCfg))
 	}
+	if cfg.AptosEnabled() {
+		aptosCfg := chainlink.AptosFactoryConfig{
+			Keystore:    keyStore.Aptos(),
+			TOMLConfigs: cfg.AptosConfigs(),
+		}
+		initOps = append(initOps, chainlink.InitAptos(ctx, relayerFactory, aptosCfg))
+	}
 
 	relayChainInterops, err := chainlink.NewCoreRelayerChainInteroperators(initOps...)
 	if err != nil {
@@ -221,7 +294,6 @@ func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.G
 	}
 
 	restrictedClient := clhttp.NewRestrictedHTTPClient(cfg.Database(), appLggr)
-	unrestrictedClient := clhttp.NewUnrestrictedHTTPClient()
 	externalInitiatorManager := webhook.NewExternalInitiatorManager(ds, unrestrictedClient)
 	return chainlink.NewApplication(chainlink.ApplicationOpts{
 		Config:                     cfg,
@@ -239,6 +311,7 @@ func (n ChainlinkAppFactory) NewApplication(ctx context.Context, cfg chainlink.G
 		LoopRegistry:               loopRegistry,
 		GRPCOpts:                   grpcOpts,
 		MercuryPool:                mercuryPool,
+		RetirementReportCache:      retirementReportCache,
 		CapabilitiesRegistry:       capabilitiesRegistry,
 	})
 }
@@ -313,7 +386,7 @@ func takeBackupIfVersionUpgrade(dbUrl url.URL, rootDir string, cfg periodicbacku
 		return errors.Wrap(err, "takeBackupIfVersionUpgrade failed")
 	}
 
-	//Because backups can take a long time we must start a "fake" health report to prevent
+	// Because backups can take a long time we must start a "fake" health report to prevent
 	//node shutdown because of healthcheck fail/timeout
 	err = databaseBackup.RunBackup(appv.String())
 	return err

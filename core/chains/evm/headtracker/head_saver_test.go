@@ -42,6 +42,9 @@ func (h *headTrackerConfig) FinalityTagBypass() bool {
 func (h *headTrackerConfig) MaxAllowedFinalityDepth() uint32 {
 	return 10000
 }
+func (h *headTrackerConfig) PersistenceEnabled() bool {
+	return true
+}
 
 type config struct {
 	finalityDepth                     uint32
@@ -146,7 +149,7 @@ func TestHeadSaver_Load(t *testing.T) {
 	// verify latest head loaded from db
 	verifyLatestHead(latestHead)
 
-	//verify latest head loaded from memory store
+	// verify latest head loaded from memory store
 	latestHead = saver.LatestChain()
 	require.NotNil(t, latestHead)
 	verifyLatestHead(latestHead)

@@ -14,7 +14,9 @@ import (
 	ocrConfigHelper "github.com/smartcontractkit/libocr/offchainreporting/confighelper"
 	ocrConfigHelper2 "github.com/smartcontractkit/libocr/offchainreporting2plus/confighelper"
 
-	"github.com/smartcontractkit/chainlink/integration-tests/client"
+	"github.com/smartcontractkit/chainlink-common/pkg/config"
+
+	"github.com/smartcontractkit/chainlink/deployment/environment/nodeclient"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/flux_aggregator_wrapper"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/functions_billing_registry_events_mock"
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/generated/operator_factory"
@@ -124,22 +126,22 @@ type OffChainAggregatorConfig struct {
 }
 
 type OffChainAggregatorV2Config struct {
-	DeltaProgress                           time.Duration
-	DeltaResend                             time.Duration
-	DeltaRound                              time.Duration
-	DeltaGrace                              time.Duration
-	DeltaStage                              time.Duration
-	RMax                                    uint8
-	S                                       []int
-	Oracles                                 []ocrConfigHelper2.OracleIdentityExtra
-	ReportingPluginConfig                   []byte
-	MaxDurationQuery                        time.Duration
-	MaxDurationObservation                  time.Duration
-	MaxDurationReport                       time.Duration
-	MaxDurationShouldAcceptFinalizedReport  time.Duration
-	MaxDurationShouldTransmitAcceptedReport time.Duration
-	F                                       int
-	OnchainConfig                           []byte
+	DeltaProgress                           *config.Duration                       `toml:",omitempty"`
+	DeltaResend                             *config.Duration                       `toml:",omitempty"`
+	DeltaRound                              *config.Duration                       `toml:",omitempty"`
+	DeltaGrace                              *config.Duration                       `toml:",omitempty"`
+	DeltaStage                              *config.Duration                       `toml:",omitempty"`
+	RMax                                    uint8                                  `toml:"-"`
+	S                                       []int                                  `toml:"-"`
+	Oracles                                 []ocrConfigHelper2.OracleIdentityExtra `toml:"-"`
+	ReportingPluginConfig                   []byte                                 `toml:"-"`
+	MaxDurationQuery                        *config.Duration                       `toml:",omitempty"`
+	MaxDurationObservation                  *config.Duration                       `toml:",omitempty"`
+	MaxDurationReport                       *config.Duration                       `toml:",omitempty"`
+	MaxDurationShouldAcceptFinalizedReport  *config.Duration                       `toml:",omitempty"`
+	MaxDurationShouldTransmitAcceptedReport *config.Duration                       `toml:",omitempty"`
+	F                                       int                                    `toml:"-"`
+	OnchainConfig                           []byte                                 `toml:"-"`
 }
 
 type OffchainAggregatorData struct {
@@ -147,16 +149,20 @@ type OffchainAggregatorData struct {
 }
 
 type ChainlinkNodeWithKeysAndAddress interface {
-	MustReadOCRKeys() (*client.OCRKeys, error)
-	MustReadP2PKeys() (*client.P2PKeys, error)
-	ExportEVMKeysForChain(string) ([]*client.ExportedEVMKey, error)
+	MustReadOCRKeys() (*nodeclient.OCRKeys, error)
+	MustReadP2PKeys() (*nodeclient.P2PKeys, error)
 	PrimaryEthAddress() (string, error)
 	EthAddresses() ([]string, error)
+	ChainlinkKeyExporter
+}
+
+type ChainlinkKeyExporter interface {
+	ExportEVMKeysForChain(string) ([]*nodeclient.ExportedEVMKey, error)
 }
 
 type ChainlinkNodeWithForwarder interface {
-	TrackForwarder(chainID *big.Int, address common.Address) (*client.Forwarder, *http.Response, error)
-	GetConfig() client.ChainlinkConfig
+	TrackForwarder(chainID *big.Int, address common.Address) (*nodeclient.Forwarder, *http.Response, error)
+	GetConfig() nodeclient.ChainlinkConfig
 }
 
 type OffChainAggregatorWithRounds interface {
@@ -222,6 +228,12 @@ type Storage interface {
 type JobByInstance struct {
 	ID       string
 	Instance string
+}
+
+type MockLINKETHFeed interface {
+	Address() string
+	LatestRoundData() (*big.Int, error)
+	LatestRoundDataUpdatedAt() (*big.Int, error)
 }
 
 type MockETHLINKFeed interface {

@@ -8,16 +8,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/smartcontractkit/chainlink/integration-tests/utils"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-testing-framework/logging"
-	seth_utils "github.com/smartcontractkit/chainlink-testing-framework/utils/seth"
-	"github.com/smartcontractkit/chainlink-testing-framework/utils/testcontext"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/logging"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/utils/testcontext"
 
+	"github.com/smartcontractkit/chainlink/deployment/environment/nodeclient"
 	"github.com/smartcontractkit/chainlink/integration-tests/actions"
-	"github.com/smartcontractkit/chainlink/integration-tests/client"
 	"github.com/smartcontractkit/chainlink/integration-tests/contracts"
 	"github.com/smartcontractkit/chainlink/integration-tests/docker/test_env"
 	tc "github.com/smartcontractkit/chainlink/integration-tests/testconfig"
@@ -49,7 +50,7 @@ func TestFluxBasic(t *testing.T) {
 	evmNetwork, err := env.GetFirstEvmNetwork()
 	require.NoError(t, err, "Error getting first evm network")
 
-	sethClient, err := seth_utils.GetChainClient(config, *evmNetwork)
+	sethClient, err := utils.TestAwareSethClient(t, config, evmNetwork)
 	require.NoError(t, err, "Error getting seth client")
 
 	adapterUUID := uuid.NewString()
@@ -94,7 +95,7 @@ func TestFluxBasic(t *testing.T) {
 
 	adapterFullURL := fmt.Sprintf("%s%s", env.MockAdapter.InternalEndpoint, adapterPath)
 	l.Info().Str("AdapterFullURL", adapterFullURL).Send()
-	bta := &client.BridgeTypeAttributes{
+	bta := &nodeclient.BridgeTypeAttributes{
 		Name: fmt.Sprintf("variable-%s", adapterUUID),
 		URL:  adapterFullURL,
 	}
@@ -102,7 +103,7 @@ func TestFluxBasic(t *testing.T) {
 		err = n.API.MustCreateBridge(bta)
 		require.NoError(t, err, "Creating bridge shouldn't fail for node %d", i+1)
 
-		fluxSpec := &client.FluxMonitorJobSpec{
+		fluxSpec := &nodeclient.FluxMonitorJobSpec{
 			Name:              fmt.Sprintf("flux-monitor-%s", adapterUUID),
 			ContractAddress:   fluxInstance.Address(),
 			EVMChainID:        fmt.Sprint(sethClient.ChainID),
@@ -110,7 +111,7 @@ func TestFluxBasic(t *testing.T) {
 			AbsoluteThreshold: 0,
 			PollTimerPeriod:   15 * time.Second, // min 15s
 			IdleTimerDisabled: true,
-			ObservationSource: client.ObservationSourceSpecBridge(bta),
+			ObservationSource: nodeclient.ObservationSourceSpecBridge(bta),
 		}
 		_, err = n.API.MustCreateJob(fluxSpec)
 		require.NoError(t, err, "Creating flux job shouldn't fail for node %d", i+1)

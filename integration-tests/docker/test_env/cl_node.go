@@ -21,23 +21,25 @@ import (
 	tc "github.com/testcontainers/testcontainers-go"
 	tcwait "github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/smartcontractkit/chainlink-testing-framework/docker"
-	"github.com/smartcontractkit/chainlink-testing-framework/docker/test_env"
-	"github.com/smartcontractkit/chainlink-testing-framework/logging"
-	"github.com/smartcontractkit/chainlink-testing-framework/logstream"
-	"github.com/smartcontractkit/chainlink-testing-framework/utils/testcontext"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/docker"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/docker/test_env"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/logging"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/logstream"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/utils/testcontext"
 
 	"github.com/smartcontractkit/chainlink/v2/core/services/chainlink"
 	"github.com/smartcontractkit/chainlink/v2/core/services/keystore/chaintype"
 
-	"github.com/smartcontractkit/chainlink/integration-tests/client"
+	"github.com/smartcontractkit/chainlink/deployment/environment/nodeclient"
+	grapqlClient "github.com/smartcontractkit/chainlink/deployment/environment/web/sdk/client"
 	it_utils "github.com/smartcontractkit/chainlink/integration-tests/utils"
 	"github.com/smartcontractkit/chainlink/integration-tests/utils/templates"
 )
 
 var (
-	ErrConnectNodeClient    = "could not connect Node HTTP Client"
-	ErrStartCLNodeContainer = "failed to start CL node container"
+	ErrConnectNodeClient        = "could not connect Node HTTP Client"
+	ErrConnectNodeGraphqlClient = "could not connect Node Graphql Client"
+	ErrStartCLNodeContainer     = "failed to start CL node container"
 )
 
 const (
@@ -47,13 +49,14 @@ const (
 
 type ClNode struct {
 	test_env.EnvComponent
-	API                   *client.ChainlinkClient `json:"-"`
-	NodeConfig            *chainlink.Config       `json:"-"`
-	NodeSecretsConfigTOML string                  `json:"-"`
-	PostgresDb            *test_env.PostgresDb    `json:"postgresDb"`
-	UserEmail             string                  `json:"userEmail"`
-	UserPassword          string                  `json:"userPassword"`
-	AlwaysPullImage       bool                    `json:"-"`
+	API                   *nodeclient.ChainlinkClient `json:"-"`
+	NodeConfig            *chainlink.Config           `json:"-"`
+	NodeSecretsConfigTOML string                      `json:"-"`
+	PostgresDb            *test_env.PostgresDb        `json:"postgresDb"`
+	UserEmail             string                      `json:"userEmail"`
+	UserPassword          string                      `json:"userPassword"`
+	AlwaysPullImage       bool                        `json:"-"`
+	GraphqlAPI            grapqlClient.Client         `json:"-"`
 	t                     *testing.T
 	l                     zerolog.Logger
 }
@@ -187,7 +190,7 @@ func (n *ClNode) PrimaryETHAddress() (string, error) {
 }
 
 func (n *ClNode) AddBootstrapJob(verifierAddr common.Address, chainId int64,
-	feedId [32]byte) (*client.Job, error) {
+	feedId [32]byte) (*nodeclient.Job, error) {
 	spec := it_utils.BuildBootstrapSpec(verifierAddr, chainId, feedId)
 	return n.API.MustCreateJob(spec)
 }
@@ -195,7 +198,7 @@ func (n *ClNode) AddBootstrapJob(verifierAddr common.Address, chainId int64,
 func (n *ClNode) AddMercuryOCRJob(verifierAddr common.Address, fromBlock uint64, chainId int64,
 	feedId [32]byte, customAllowedFaults *int, bootstrapUrl string,
 	mercuryServerUrl string, mercuryServerPubKey string,
-	eaUrls []*url.URL) (*client.Job, error) {
+	eaUrls []*url.URL) (*nodeclient.Job, error) {
 
 	csaKeys, _, err := n.API.ReadCSAKeys()
 	if err != nil {
@@ -247,7 +250,7 @@ func (n *ClNode) GetContainerName() string {
 	return strings.Replace(name, "/", "", -1)
 }
 
-func (n *ClNode) GetAPIClient() *client.ChainlinkClient {
+func (n *ClNode) GetAPIClient() *nodeclient.ChainlinkClient {
 	return n.API
 }
 
@@ -261,7 +264,7 @@ func (n *ClNode) GetPeerUrl() (string, error) {
 	return fmt.Sprintf("%s@%s:%d", p2pId, n.GetContainerName(), 6690), nil
 }
 
-func (n *ClNode) GetNodeCSAKeys() (*client.CSAKeys, error) {
+func (n *ClNode) GetNodeCSAKeys() (*nodeclient.CSAKeys, error) {
 	csaKeys, _, err := n.API.ReadCSAKeys()
 	if err != nil {
 		return nil, err
@@ -339,19 +342,25 @@ func (n *ClNode) containerStartOrRestart(restartDb bool) error {
 		Str("userEmail", n.UserEmail).
 		Str("userPassword", n.UserPassword).
 		Msg("Started Chainlink Node container")
-	clClient, err := client.NewChainlinkClient(&client.ChainlinkConfig{
+	config := &nodeclient.ChainlinkConfig{
 		URL:        clEndpoint,
 		Email:      n.UserEmail,
 		Password:   n.UserPassword,
 		InternalIP: ip,
-	},
-		n.l)
+	}
+	clClient, err := nodeclient.NewChainlinkClient(config, n.l)
 	if err != nil {
 		return fmt.Errorf("%s err: %w", ErrConnectNodeClient, err)
 	}
 
+	graphqlClient, err := newChainLinkGraphqlClient(config)
+	if err != nil {
+		return fmt.Errorf("%s err: %w", ErrConnectNodeGraphqlClient, err)
+	}
+
 	n.Container = container
 	n.API = clClient
+	n.GraphqlAPI = graphqlClient
 
 	return nil
 }
@@ -490,4 +499,12 @@ func (n *ClNode) getContainerRequest(secrets string) (
 			},
 		},
 	}, nil
+}
+
+func newChainLinkGraphqlClient(c *nodeclient.ChainlinkConfig) (grapqlClient.Client, error) {
+	nodeClient, err := grapqlClient.New(c.URL, grapqlClient.Credentials{Email: c.Email, Password: c.Password})
+	if err != nil {
+		return nil, err
+	}
+	return nodeClient, nil
 }

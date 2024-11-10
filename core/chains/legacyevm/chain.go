@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 
 	gotoml "github.com/pelletier/go-toml/v2"
 	"go.uber.org/multierr"
+
+	"github.com/smartcontractkit/chainlink/v2/core/chains/evm/gas/rollups"
 
 	common "github.com/smartcontractkit/chainlink-common/pkg/chains"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
@@ -130,25 +133,10 @@ type AppConfig interface {
 	toml.HasEVMConfigs
 }
 
-type ChainRelayExtenderConfig struct {
+type ChainRelayOpts struct {
 	Logger   logger.Logger
 	KeyStore keystore.Eth
 	ChainOpts
-}
-
-func (c ChainRelayExtenderConfig) Validate() error {
-	err := c.ChainOpts.Validate()
-	if c.Logger == nil {
-		err = errors.Join(err, errors.New("nil Logger"))
-	}
-	if c.KeyStore == nil {
-		err = errors.Join(err, errors.New("nil Keystore"))
-	}
-
-	if err != nil {
-		err = fmt.Errorf("invalid ChainRelayerExtenderConfig: %w", err)
-	}
-	return err
 }
 
 type ChainOpts struct {
@@ -187,7 +175,7 @@ func (o ChainOpts) Validate() error {
 	return err
 }
 
-func NewTOMLChain(ctx context.Context, chain *toml.EVMConfig, opts ChainRelayExtenderConfig) (Chain, error) {
+func NewTOMLChain(ctx context.Context, chain *toml.EVMConfig, opts ChainRelayOpts, clientsByChainID map[string]rollups.DAClient) (Chain, error) {
 	err := opts.Validate()
 	if err != nil {
 		return nil, err
@@ -199,17 +187,21 @@ func NewTOMLChain(ctx context.Context, chain *toml.EVMConfig, opts ChainRelayExt
 	}
 	cfg := evmconfig.NewTOMLChainScopedConfig(chain, l)
 	// note: per-chain validation is not necessary at this point since everything is checked earlier on boot.
-	return newChain(ctx, cfg, chain.Nodes, opts)
+	return newChain(ctx, cfg, chain.Nodes, opts, clientsByChainID)
 }
 
-func newChain(ctx context.Context, cfg *evmconfig.ChainScoped, nodes []*toml.Node, opts ChainRelayExtenderConfig) (*chain, error) {
+func newChain(ctx context.Context, cfg *evmconfig.ChainScoped, nodes []*toml.Node, opts ChainRelayOpts, clientsByChainID map[string]rollups.DAClient) (*chain, error) {
 	chainID := cfg.EVM().ChainID()
 	l := opts.Logger
 	var client evmclient.Client
 	if !opts.AppConfig.EVMRPCEnabled() {
 		client = evmclient.NewNullClient(chainID, l)
 	} else if opts.GenEthClient == nil {
-		client = evmclient.NewEvmClient(cfg.EVM().NodePool(), cfg.EVM(), cfg.EVM().NodePool().Errors(), l, chainID, nodes, cfg.EVM().ChainType())
+		var err error
+		client, err = evmclient.NewEvmClient(cfg.EVM().NodePool(), cfg.EVM(), cfg.EVM().NodePool().Errors(), l, chainID, nodes, cfg.EVM().ChainType())
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		client = opts.GenEthClient(chainID)
 	}
@@ -220,7 +212,12 @@ func newChain(ctx context.Context, cfg *evmconfig.ChainScoped, nodes []*toml.Nod
 	if !opts.AppConfig.EVMRPCEnabled() {
 		headTracker = headtracker.NullTracker
 	} else if opts.GenHeadTracker == nil {
-		orm := headtracker.NewORM(*chainID, opts.DS)
+		var orm headtracker.ORM
+		if cfg.EVM().HeadTracker().PersistenceEnabled() {
+			orm = headtracker.NewORM(*chainID, opts.DS)
+		} else {
+			orm = headtracker.NewNullORM()
+		}
 		headSaver = headtracker.NewHeadSaver(l, orm, cfg.EVM(), cfg.EVM().HeadTracker())
 		headTracker = headtracker.NewHeadTracker(l, client, cfg.EVM(), cfg.EVM().HeadTracker(), headBroadcaster, headSaver, opts.MailMon)
 	} else {
@@ -241,13 +238,14 @@ func newChain(ctx context.Context, cfg *evmconfig.ChainScoped, nodes []*toml.Nod
 				KeepFinalizedBlocksDepth: int64(cfg.EVM().LogKeepBlocksDepth()),
 				LogPrunePageSize:         int64(cfg.EVM().LogPrunePageSize()),
 				BackupPollerBlockDelay:   int64(cfg.EVM().BackupLogPollerBlockDelay()),
+				ClientErrors:             cfg.EVM().NodePool().Errors(),
 			}
 			logPoller = logpoller.NewLogPoller(logpoller.NewObservedORM(chainID, opts.DS, l), client, l, headTracker, lpOpts)
 		}
 	}
 
 	// note: gas estimator is started as a part of the txm
-	txm, gasEstimator, err := newEvmTxm(opts.DS, cfg.EVM(), opts.AppConfig.EVMRPCEnabled(), opts.AppConfig.Database(), opts.AppConfig.Database().Listener(), client, l, logPoller, opts)
+	txm, gasEstimator, err := newEvmTxm(opts.DS, cfg.EVM(), opts.AppConfig.EVMRPCEnabled(), opts.AppConfig.Database(), opts.AppConfig.Database().Listener(), client, l, logPoller, opts, headTracker, clientsByChainID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to instantiate EvmTxm for chain with ID %s: %w", chainID.String(), err)
 	}
@@ -269,6 +267,8 @@ func newChain(ctx context.Context, cfg *evmconfig.ChainScoped, nodes []*toml.Nod
 	var logBroadcaster log.Broadcaster
 	if !opts.AppConfig.EVMRPCEnabled() {
 		logBroadcaster = &log.NullBroadcaster{ErrMsg: fmt.Sprintf("Ethereum is disabled for chain %d", chainID)}
+	} else if !cfg.EVM().LogBroadcasterEnabled() {
+		logBroadcaster = &log.NullBroadcaster{ErrMsg: fmt.Sprintf("LogBroadcaster disabled for chain %d", chainID)}
 	} else if opts.GenLogBroadcaster == nil {
 		logORM := log.NewORM(opts.DS, *chainID)
 		logBroadcaster = log.NewBroadcaster(logORM, client, cfg.EVM(), l, highestSeenHead, opts.MailMon)
@@ -390,6 +390,19 @@ func (c *chain) SendTx(ctx context.Context, from, to string, amount *big.Int, ba
 	return c.Transact(ctx, from, to, amount, balanceCheck)
 }
 
+func (c *chain) LatestHead(_ context.Context) (types.Head, error) {
+	latestChain := c.headTracker.LatestChain()
+	if latestChain == nil {
+		return types.Head{}, errors.New("latest chain not found")
+	}
+
+	return types.Head{
+		Height:    strconv.FormatInt(latestChain.BlockNumber(), 10),
+		Hash:      latestChain.Hash.Bytes(),
+		Timestamp: uint64(latestChain.Timestamp.Unix()),
+	}, nil
+}
+
 func (c *chain) GetChainStatus(ctx context.Context) (types.ChainStatus, error) {
 	toml, err := c.cfg.EVM().TOMLString()
 	if err != nil {
@@ -418,7 +431,6 @@ func (c *chain) listNodeStatuses(start, end int) ([]types.NodeStatus, int, error
 	for _, n := range nodes[start:end] {
 		var (
 			nodeState string
-			exists    bool
 		)
 		toml, err := gotoml.Marshal(n)
 		if err != nil {
@@ -427,10 +439,11 @@ func (c *chain) listNodeStatuses(start, end int) ([]types.NodeStatus, int, error
 		if states == nil {
 			nodeState = "Unknown"
 		} else {
-			nodeState, exists = states[*n.Name]
-			if !exists {
-				// The node is in the DB and the chain is enabled but it's not running
-				nodeState = "NotLoaded"
+			// The node is in the DB and the chain is enabled but it's not running
+			nodeState = "NotLoaded"
+			s, exists := states[*n.Name]
+			if exists {
+				nodeState = s
 			}
 		}
 		stats = append(stats, types.NodeStatus{

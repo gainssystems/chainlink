@@ -240,28 +240,25 @@ type TestCapability struct {
 	abstractTestCapability
 }
 
-func (t TestCapability) Execute(ctx context.Context, request commoncap.CapabilityRequest) (<-chan commoncap.CapabilityResponse, error) {
-	ch := make(chan commoncap.CapabilityResponse, 1)
-
+func (t TestCapability) Execute(ctx context.Context, request commoncap.CapabilityRequest) (commoncap.CapabilityResponse, error) {
 	value := request.Inputs.Underlying["executeValue1"]
 
 	response, err := values.NewMap(map[string]any{"response": value})
 	if err != nil {
-		return nil, err
-	}
-	ch <- commoncap.CapabilityResponse{
-		Value: response,
+		return commoncap.CapabilityResponse{}, err
 	}
 
-	return ch, nil
+	return commoncap.CapabilityResponse{
+		Value: response,
+	}, nil
 }
 
 type TestErrorCapability struct {
 	abstractTestCapability
 }
 
-func (t TestErrorCapability) Execute(ctx context.Context, request commoncap.CapabilityRequest) (<-chan commoncap.CapabilityResponse, error) {
-	return nil, errors.New("an error")
+func (t TestErrorCapability) Execute(ctx context.Context, request commoncap.CapabilityRequest) (commoncap.CapabilityResponse, error) {
+	return commoncap.CapabilityResponse{}, errors.New("an error")
 }
 
 func NewP2PPeerID(t *testing.T) p2ptypes.PeerID {
@@ -279,7 +276,7 @@ func NewPeerID() string {
 
 	peerID := append(libp2pMagic(), privKey[:]...)
 
-	return base58.Encode(peerID[:])
+	return base58.Encode(peerID)
 }
 
 func libp2pMagic() []byte {

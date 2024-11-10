@@ -12,12 +12,18 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 	"github.com/smartcontractkit/chainlink-common/pkg/values"
+	"github.com/smartcontractkit/chainlink/v2/core/services/job"
+
 	"github.com/smartcontractkit/chainlink/v2/core/internal/testutils/pgtest"
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
 func randomID() string {
-	b := make([]byte, 32)
+	return random(32)
+}
+
+func random(length int) string {
+	b := make([]byte, length)
 	_, err := rand.Read(b)
 	if err != nil {
 		panic(err)
@@ -51,7 +57,7 @@ func Test_StoreDB(t *testing.T) {
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
 	require.NoError(t, err)
 
 	gotEs, err := store.Get(tests.Context(t), es.ExecutionID)
@@ -83,10 +89,10 @@ func Test_StoreDB_DuplicateEntry(t *testing.T) {
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
 	require.NoError(t, err)
 
-	err = store.Add(tests.Context(t), &es)
+	_, err = store.Add(tests.Context(t), &es)
 	assert.ErrorContains(t, err, "duplicate key value violates")
 }
 
@@ -111,7 +117,7 @@ func Test_StoreDB_UpdateStatus(t *testing.T) {
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
 	require.NoError(t, err)
 
 	completedStatus := StatusCompleted
@@ -147,7 +153,7 @@ func Test_StoreDB_UpdateStep(t *testing.T) {
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
 	require.NoError(t, err)
 
 	stepOne.Status = StatusCompleted
@@ -195,7 +201,7 @@ func Test_StoreDB_WorkflowStatus(t *testing.T) {
 			Status:      s,
 		}
 
-		err := store.Add(tests.Context(t), &es)
+		_, err := store.Add(tests.Context(t), &es)
 		require.NoError(t, err)
 	}
 }
@@ -223,7 +229,7 @@ func Test_StoreDB_WorkflowStepStatus(t *testing.T) {
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
 	require.NoError(t, err)
 
 	for s := range ValidStatuses {
@@ -233,10 +239,24 @@ func Test_StoreDB_WorkflowStepStatus(t *testing.T) {
 	}
 }
 
+func createWorkflow(t *testing.T, store *DBStore, id string) {
+	sql := `INSERT INTO workflow_specs (workflow, workflow_id, workflow_owner, workflow_name, created_at, updated_at)
+	VALUES (:workflow, :workflow_id, :workflow_owner, :workflow_name, NOW(), NOW())`
+	var wfSpec job.WorkflowSpec
+	wfSpec.Workflow = ""
+	wfSpec.WorkflowID = id
+	wfSpec.WorkflowOwner = random(20)
+	wfSpec.WorkflowName = random(20)
+	_, err := store.db.NamedExecContext(tests.Context(t), sql, wfSpec)
+	require.NoError(t, err)
+}
+
 func Test_StoreDB_GetUnfinishedSteps(t *testing.T) {
 	store := newTestDBStore(t)
 
 	id := randomID()
+	wid := randomID()
+	createWorkflow(t, store, wid)
 	stepOne := &WorkflowExecutionStep{
 		ExecutionID: id,
 		Ref:         "step1",
@@ -253,10 +273,27 @@ func Test_StoreDB_GetUnfinishedSteps(t *testing.T) {
 			"step2": stepTwo,
 		},
 		ExecutionID: id,
+		WorkflowID:  wid,
 		Status:      StatusStarted,
 	}
 
-	err := store.Add(tests.Context(t), &es)
+	_, err := store.Add(tests.Context(t), &es)
+	require.NoError(t, err)
+
+	id2 := randomID()
+	wid2 := randomID()
+	createWorkflow(t, store, wid2)
+	es2 := WorkflowExecution{
+		Steps: map[string]*WorkflowExecutionStep{
+			"step1": stepOne,
+			"step2": stepTwo,
+		},
+		ExecutionID: id2,
+		WorkflowID:  wid2,
+		Status:      StatusStarted,
+	}
+
+	_, err = store.Add(tests.Context(t), &es2)
 	require.NoError(t, err)
 
 	id = randomID()
@@ -265,10 +302,10 @@ func Test_StoreDB_GetUnfinishedSteps(t *testing.T) {
 		Status:      StatusCompleted,
 		Steps:       map[string]*WorkflowExecutionStep{},
 	}
-	err = store.Add(tests.Context(t), &esTwo)
+	_, err = store.Add(tests.Context(t), &esTwo)
 	require.NoError(t, err)
 
-	states, err := store.GetUnfinished(tests.Context(t), 0, 100)
+	states, err := store.GetUnfinished(tests.Context(t), wid, 0, 100)
 	require.NoError(t, err)
 
 	assert.Len(t, states, 1)

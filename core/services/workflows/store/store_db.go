@@ -14,6 +14,7 @@ import (
 	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	"github.com/smartcontractkit/chainlink-common/pkg/values"
 	valuespb "github.com/smartcontractkit/chainlink-common/pkg/values/pb"
+
 	"github.com/smartcontractkit/chainlink/v2/core/logger"
 )
 
@@ -28,12 +29,12 @@ type DBStore struct {
 // `workflowExecutionRow` describes a row
 // of the `workflow_executions` table
 type workflowExecutionRow struct {
-	ID         string
-	WorkflowID *string
-	Status     string
-	CreatedAt  *time.Time
-	UpdatedAt  *time.Time
-	FinishedAt *time.Time
+	ID         string     `db:"id"`
+	WorkflowID *string    `db:"workflow_id"`
+	Status     string     `db:"status"`
+	CreatedAt  *time.Time `db:"created_at"`
+	UpdatedAt  *time.Time `db:"updated_at"`
+	FinishedAt *time.Time `db:"finished_at"`
 }
 
 // `workflowStepRow` describes a row
@@ -47,6 +48,26 @@ type workflowStepRow struct {
 	OutputErr           *string    `db:"output_err"`
 	OutputValue         []byte     `db:"output_value"`
 	UpdatedAt           *time.Time `db:"updated_at"`
+}
+
+// workflowExecutionWithStep is a struct that represents a row from the join of the workflow_executions and workflow_steps tables.
+type workflowExecutionWithStep struct {
+	// WorkflowExecutionStep fields
+	WSWorkflowExecutionID string     `db:"ws_workflow_execution_id"`
+	WSRef                 string     `db:"ws_ref"`
+	WSStatus              string     `db:"ws_status"`
+	WSInputs              []byte     `db:"ws_inputs"`
+	WSOutputErr           *string    `db:"ws_output_err"`
+	WSOutputValue         []byte     `db:"ws_output_value"`
+	WSUpdatedAt           *time.Time `db:"ws_updated_at"`
+
+	// WorkflowExecution fields
+	WEID         string     `db:"we_id"`
+	WEWorkflowID *string    `db:"we_workflow_id"`
+	WEStatus     string     `db:"we_status"`
+	WECreatedAt  *time.Time `db:"we_created_at"`
+	WEUpdatedAt  *time.Time `db:"we_updated_at"`
+	WEFinishedAt *time.Time `db:"we_finished_at"`
 }
 
 // `UpdateStatus` updates the status of the given workflow execution
@@ -77,45 +98,80 @@ func (d *DBStore) UpsertStep(ctx context.Context, stepState *WorkflowExecutionSt
 	return d.Get(ctx, step.WorkflowExecutionID)
 }
 
-// `Get` fetches the ExecutionState from the database.
+// Get fetches the ExecutionState from the database.
 func (d *DBStore) Get(ctx context.Context, executionID string) (WorkflowExecution, error) {
-	wex := &workflowExecutionRow{}
-	err := d.db.GetContext(ctx, wex, `SELECT * FROM workflow_executions WHERE id = $1`, executionID)
+	sql := `
+    SELECT
+			workflow_executions.id AS we_id,
+			workflow_executions.workflow_id AS we_workflow_id,
+			workflow_executions.status AS we_status,
+			workflow_executions.created_at AS we_created_at,
+			workflow_executions.updated_at AS we_updated_at,
+			workflow_executions.finished_at AS we_finished_at,
+			workflow_steps.workflow_execution_id AS ws_workflow_execution_id,
+			workflow_steps.ref AS ws_ref,
+			workflow_steps.status AS ws_status,
+			workflow_steps.inputs AS ws_inputs,
+			workflow_steps.output_err AS ws_output_err,
+			workflow_steps.output_value AS ws_output_value,
+			workflow_steps.updated_at AS ws_updated_at
+	FROM workflow_executions JOIN workflow_steps
+	ON workflow_executions.id = workflow_steps.workflow_execution_id
+	WHERE workflow_executions.id = $1`
+
+	var records []workflowExecutionWithStep
+	err := d.db.SelectContext(ctx, &records, sql, executionID)
 	if err != nil {
 		return WorkflowExecution{}, err
 	}
-
-	ws := []workflowStepRow{}
-	err = d.db.SelectContext(ctx, &ws, `SELECT * FROM workflow_steps WHERE workflow_execution_id = $1`, wex.ID)
+	idToExecutionState, err := workflowExecutionsWithStepToWorkflowExecutions(records)
 	if err != nil {
 		return WorkflowExecution{}, err
 	}
+	state, ok := idToExecutionState[executionID]
+	if !ok {
+		return WorkflowExecution{}, fmt.Errorf("could not find workflow execution with id %s", executionID)
+	}
+	return *state, nil
+}
 
-	refToStep := map[string]*WorkflowExecutionStep{}
-	for _, s := range ws {
-		ss, err := stepToState(s)
-		if err != nil {
-			return WorkflowExecution{}, err
+func workflowExecutionsWithStepToWorkflowExecutions(wews []workflowExecutionWithStep) (map[string]*WorkflowExecution, error) {
+	idToExecutionState := map[string]*WorkflowExecution{}
+	for _, jr := range wews {
+		var wid string
+		if jr.WEWorkflowID != nil {
+			wid = *jr.WEWorkflowID
+		}
+		if _, ok := idToExecutionState[jr.WEID]; !ok {
+			idToExecutionState[jr.WEID] = &WorkflowExecution{
+				ExecutionID: jr.WEID,
+				WorkflowID:  wid,
+				Status:      jr.WEStatus,
+				Steps:       map[string]*WorkflowExecutionStep{},
+				CreatedAt:   jr.WECreatedAt,
+				UpdatedAt:   jr.WEUpdatedAt,
+				FinishedAt:  jr.WEFinishedAt,
+			}
 		}
 
-		refToStep[s.Ref] = ss
+		state, err := stepToState(workflowStepRow{
+			WorkflowExecutionID: jr.WSWorkflowExecutionID,
+			Ref:                 jr.WSRef,
+			OutputErr:           jr.WSOutputErr,
+			OutputValue:         jr.WSOutputValue,
+			Inputs:              jr.WSInputs,
+			Status:              jr.WSStatus,
+			UpdatedAt:           jr.WSUpdatedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		es := idToExecutionState[jr.WEID]
+		es.Steps[state.Ref] = state
 	}
 
-	var workflowID string
-	if wex.WorkflowID != nil {
-		workflowID = *wex.WorkflowID
-	}
-
-	es := WorkflowExecution{
-		ExecutionID: wex.ID,
-		WorkflowID:  workflowID,
-		Status:      wex.Status,
-		Steps:       refToStep,
-		CreatedAt:   wex.CreatedAt,
-		UpdatedAt:   wex.UpdatedAt,
-		FinishedAt:  wex.FinishedAt,
-	}
-	return es, nil
+	return idToExecutionState, nil
 }
 
 func stepToState(step workflowStepRow) (*WorkflowExecutionStep, error) {
@@ -202,11 +258,12 @@ func stateToStep(state *WorkflowExecutionStep) (workflowStepRow, error) {
 	return wsr, nil
 }
 
-// `Add` creates the relevant workflow_execution and workflow_step entries
+// Add creates the relevant workflow_execution and workflow_step entries
 // to persist the passed in ExecutionState.
-func (d *DBStore) Add(ctx context.Context, state *WorkflowExecution) error {
+func (d *DBStore) Add(ctx context.Context, state *WorkflowExecution) (WorkflowExecution, error) {
 	l := d.lggr.With("executionID", state.ExecutionID, "workflowID", state.WorkflowID, "status", state.Status)
-	return d.transact(ctx, func(db *DBStore) error {
+	var workflowExecution WorkflowExecution
+	err := d.transact(ctx, func(db *DBStore) error {
 		var wid *string
 		if state.WorkflowID != "" {
 			wid = &state.WorkflowID
@@ -219,12 +276,23 @@ func (d *DBStore) Add(ctx context.Context, state *WorkflowExecution) error {
 		}
 		l.Debug("Adding workflow execution")
 
-		err := db.insertWorkflowExecution(ctx, wex)
+		dbWex, err := db.insertWorkflowExecution(ctx, wex)
 		if err != nil {
 			return fmt.Errorf("could not insert workflow execution %s: %w", state.ExecutionID, err)
 		}
-
-		ws := []workflowStepRow{}
+		workflowExecution = WorkflowExecution{
+			ExecutionID: dbWex.ID,
+			Status:      dbWex.Status,
+			Steps:       state.Steps,
+			CreatedAt:   dbWex.CreatedAt,
+			UpdatedAt:   dbWex.UpdatedAt,
+			FinishedAt:  dbWex.FinishedAt,
+		}
+		// Tests are not passing the ID, so to avoid a nil-pointer dereference, we added this check.
+		if wid != nil {
+			workflowExecution.WorkflowID = *wid
+		}
+		var ws []workflowStepRow
 		for _, step := range state.Steps {
 			step, err := stateToStep(step)
 			if err != nil {
@@ -238,6 +306,8 @@ func (d *DBStore) Add(ctx context.Context, state *WorkflowExecution) error {
 		}
 		return nil
 	})
+
+	return workflowExecution, err
 }
 
 func (d *DBStore) upsertSteps(ctx context.Context, steps []workflowStepRow) error {
@@ -269,14 +339,15 @@ func (d *DBStore) upsertSteps(ctx context.Context, steps []workflowStepRow) erro
 	return err
 }
 
-func (d *DBStore) insertWorkflowExecution(ctx context.Context, execution *workflowExecutionRow) error {
+func (d *DBStore) insertWorkflowExecution(ctx context.Context, execution *workflowExecutionRow) (*workflowExecutionRow, error) {
 	sql := `
 	INSERT INTO
 	workflow_executions(id, workflow_id, status, created_at)
-	VALUES ($1, $2, $3, $4)
+	VALUES ($1, $2, $3, $4) RETURNING *
 	`
-	_, err := d.db.ExecContext(ctx, sql, execution.ID, execution.WorkflowID, execution.Status, d.clock.Now())
-	return err
+	wex := &workflowExecutionRow{}
+	err := d.db.GetContext(ctx, wex, sql, execution.ID, execution.WorkflowID, execution.Status, d.clock.Now())
+	return wex, err
 }
 
 func (d *DBStore) transact(ctx context.Context, fn func(*DBStore) error) error {
@@ -291,7 +362,7 @@ func (d *DBStore) transact(ctx context.Context, fn func(*DBStore) error) error {
 	)
 }
 
-func (d *DBStore) GetUnfinished(ctx context.Context, offset, limit int) ([]WorkflowExecution, error) {
+func (d *DBStore) GetUnfinished(ctx context.Context, workflowID string, offset, limit int) ([]WorkflowExecution, error) {
 	sql := `
 	SELECT
 		workflow_steps.workflow_execution_id AS ws_workflow_execution_id,
@@ -311,69 +382,23 @@ func (d *DBStore) GetUnfinished(ctx context.Context, offset, limit int) ([]Workf
 	JOIN workflow_steps
 	ON  workflow_steps.workflow_execution_id = workflow_executions.id
 	WHERE workflow_executions.status = $1
+	AND workflow_executions.workflow_id = $2
 	ORDER BY workflow_executions.created_at DESC
-	LIMIT $2
-	OFFSET $3
+	LIMIT $3
+	OFFSET $4
 	`
-	joinRecords := []struct {
-		// WorkflowExecutionStep fields
-		WSWorkflowExecutionID string     `db:"ws_workflow_execution_id"`
-		WSRef                 string     `db:"ws_ref"`
-		WSStatus              string     `db:"ws_status"`
-		WSInputs              []byte     `db:"ws_inputs"`
-		WSOutputErr           *string    `db:"ws_output_err"`
-		WSOutputValue         []byte     `db:"ws_output_value"`
-		WSUpdatedAt           *time.Time `db:"ws_updated_at"`
-
-		// WorkflowExecution fields
-		WEID         string     `db:"we_id"`
-		WEWorkflowID *string    `db:"we_workflow_id"`
-		WEStatus     string     `db:"we_status"`
-		WECreatedAt  *time.Time `db:"we_created_at"`
-		WEUpdatedAt  *time.Time `db:"we_updated_at"`
-		WEFinishedAt *time.Time `db:"we_finished_at"`
-	}{}
-	err := d.db.SelectContext(ctx, &joinRecords, sql, StatusStarted, limit, offset)
+	var joinRecords []workflowExecutionWithStep
+	err := d.db.SelectContext(ctx, &joinRecords, sql, StatusStarted, workflowID, limit, offset)
 	if err != nil {
 		return []WorkflowExecution{}, err
 	}
 
-	idToExecutionState := map[string]*WorkflowExecution{}
-	for _, jr := range joinRecords {
-		var wid string
-		if jr.WEWorkflowID != nil {
-			wid = *jr.WEWorkflowID
-		}
-		if _, ok := idToExecutionState[jr.WEID]; !ok {
-			idToExecutionState[jr.WEID] = &WorkflowExecution{
-				ExecutionID: jr.WEID,
-				WorkflowID:  wid,
-				Status:      jr.WEStatus,
-				Steps:       map[string]*WorkflowExecutionStep{},
-				CreatedAt:   jr.WECreatedAt,
-				UpdatedAt:   jr.WEUpdatedAt,
-				FinishedAt:  jr.WEFinishedAt,
-			}
-		}
-
-		state, err := stepToState(workflowStepRow{
-			WorkflowExecutionID: jr.WSWorkflowExecutionID,
-			Ref:                 jr.WSRef,
-			OutputErr:           jr.WSOutputErr,
-			OutputValue:         jr.WSOutputValue,
-			Inputs:              jr.WSInputs,
-			Status:              jr.WSStatus,
-			UpdatedAt:           jr.WSUpdatedAt,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		es := idToExecutionState[jr.WEID]
-		es.Steps[state.Ref] = state
+	idToExecutionState, err := workflowExecutionsWithStepToWorkflowExecutions(joinRecords)
+	if err != nil {
+		return []WorkflowExecution{}, err
 	}
 
-	states := []WorkflowExecution{}
+	var states []WorkflowExecution
 	for _, s := range idToExecutionState {
 		states = append(states, *s)
 	}

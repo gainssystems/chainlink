@@ -27,10 +27,10 @@ import (
 	capStreams "github.com/smartcontractkit/chainlink-common/pkg/capabilities/datastreams"
 	"github.com/smartcontractkit/chainlink-common/pkg/capabilities/triggers"
 	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
 	"github.com/smartcontractkit/chainlink-common/pkg/types/mercury"
 
-	"github.com/smartcontractkit/chainlink/v2/core/logger"
 	mercuryutils "github.com/smartcontractkit/chainlink/v2/core/services/relay/evm/mercury/utils"
 	"github.com/smartcontractkit/chainlink/v2/core/services/relay/evm/mercury/wsrpc"
 	"github.com/smartcontractkit/chainlink/v2/core/services/relay/evm/mercury/wsrpc/pb"
@@ -97,9 +97,11 @@ type ConfigTracker interface {
 }
 
 type TransmitterReportDecoder interface {
-	BenchmarkPriceFromReport(report ocrtypes.Report) (*big.Int, error)
-	ObservationTimestampFromReport(report ocrtypes.Report) (uint32, error)
+	BenchmarkPriceFromReport(ctx context.Context, report ocrtypes.Report) (*big.Int, error)
+	ObservationTimestampFromReport(ctx context.Context, report ocrtypes.Report) (uint32, error)
 }
+
+type BenchmarkPriceDecoder func(ctx context.Context, feedID mercuryutils.FeedID, report ocrtypes.Report) (*big.Int, error)
 
 var _ Transmitter = (*mercuryTransmitter)(nil)
 
@@ -110,14 +112,15 @@ type TransmitterConfig interface {
 
 type mercuryTransmitter struct {
 	services.StateMachine
-	lggr logger.Logger
+	lggr logger.SugaredLogger
 	cfg  TransmitterConfig
 
 	orm     ORM
 	servers map[string]*server
 
-	codec             TransmitterReportDecoder
-	triggerCapability *triggers.MercuryTriggerService
+	codec                 TransmitterReportDecoder
+	benchmarkPriceDecoder BenchmarkPriceDecoder
+	triggerCapability     *triggers.MercuryTriggerService
 
 	feedID      mercuryutils.FeedID
 	jobID       int32
@@ -147,7 +150,7 @@ func getPayloadTypes() abi.Arguments {
 }
 
 type server struct {
-	lggr logger.Logger
+	lggr logger.SugaredLogger
 
 	transmitTimeout time.Duration
 
@@ -176,7 +179,7 @@ func (s *server) HealthReport() map[string]error {
 
 func (s *server) runDeleteQueueLoop(stopCh services.StopChan, wg *sync.WaitGroup) {
 	defer wg.Done()
-	runloopCtx, cancel := stopCh.Ctx(context.Background())
+	ctx, cancel := stopCh.NewCtx()
 	defer cancel()
 
 	// Exponential backoff for very rarely occurring errors (DB disconnect etc)
@@ -191,7 +194,7 @@ func (s *server) runDeleteQueueLoop(stopCh services.StopChan, wg *sync.WaitGroup
 		select {
 		case req := <-s.deleteQueue:
 			for {
-				if err := s.pm.Delete(runloopCtx, req); err != nil {
+				if err := s.pm.Delete(ctx, req); err != nil {
 					s.lggr.Errorw("Failed to delete transmit request record", "err", err, "req.Payload", req.Payload)
 					s.transmitQueueDeleteErrorCount.Inc()
 					select {
@@ -224,7 +227,7 @@ func (s *server) runQueueLoop(stopCh services.StopChan, wg *sync.WaitGroup, feed
 		Factor: 2,
 		Jitter: true,
 	}
-	runloopCtx, cancel := stopCh.Ctx(context.Background())
+	ctx, cancel := stopCh.NewCtx()
 	defer cancel()
 	for {
 		t := s.q.BlockingPop()
@@ -232,12 +235,13 @@ func (s *server) runQueueLoop(stopCh services.StopChan, wg *sync.WaitGroup, feed
 			// queue was closed
 			return
 		}
-		ctx, cancel := context.WithTimeout(runloopCtx, utils.WithJitter(s.transmitTimeout))
-		res, err := s.c.Transmit(ctx, t.Req)
-		cancel()
-		if runloopCtx.Err() != nil {
-			// runloop context is only canceled on transmitter close so we can
-			// exit the runloop here
+		res, err := func(ctx context.Context) (*pb.TransmitResponse, error) {
+			ctx, cancel := context.WithTimeout(ctx, utils.WithJitter(s.transmitTimeout))
+			cancel()
+			return s.c.Transmit(ctx, t.Req)
+		}(ctx)
+		if ctx.Err() != nil {
+			// only canceled on transmitter close so we can exit
 			return
 		} else if err != nil {
 			s.transmitConnectionErrorCount.Inc()
@@ -285,7 +289,7 @@ func (s *server) runQueueLoop(stopCh services.StopChan, wg *sync.WaitGroup, feed
 
 func newServer(lggr logger.Logger, cfg TransmitterConfig, client wsrpc.Client, pm *PersistenceManager, serverURL, feedIDHex string) *server {
 	return &server{
-		lggr,
+		logger.Sugared(lggr),
 		cfg.TransmitTimeout().Duration(),
 		client,
 		pm,
@@ -301,21 +305,23 @@ func newServer(lggr logger.Logger, cfg TransmitterConfig, client wsrpc.Client, p
 	}
 }
 
-func NewTransmitter(lggr logger.Logger, cfg TransmitterConfig, clients map[string]wsrpc.Client, fromAccount ed25519.PublicKey, jobID int32, feedID [32]byte, orm ORM, codec TransmitterReportDecoder, triggerCapability *triggers.MercuryTriggerService) *mercuryTransmitter {
+func NewTransmitter(lggr logger.Logger, cfg TransmitterConfig, clients map[string]wsrpc.Client, fromAccount ed25519.PublicKey, jobID int32, feedID [32]byte, orm ORM, codec TransmitterReportDecoder, benchmarkPriceDecoder BenchmarkPriceDecoder, triggerCapability *triggers.MercuryTriggerService) *mercuryTransmitter {
+	sugared := logger.Sugared(lggr)
 	feedIDHex := fmt.Sprintf("0x%x", feedID[:])
 	servers := make(map[string]*server, len(clients))
 	for serverURL, client := range clients {
-		cLggr := lggr.Named(serverURL).With("serverURL", serverURL)
+		cLggr := sugared.Named(serverURL).With("serverURL", serverURL)
 		pm := NewPersistenceManager(cLggr, serverURL, orm, jobID, int(cfg.TransmitQueueMaxSize()), flushDeletesFrequency, pruneFrequency)
 		servers[serverURL] = newServer(cLggr, cfg, client, pm, serverURL, feedIDHex)
 	}
 	return &mercuryTransmitter{
 		services.StateMachine{},
-		lggr.Named("MercuryTransmitter").With("feedID", feedIDHex),
+		sugared.Named("MercuryTransmitter").With("feedID", feedIDHex),
 		cfg,
 		orm,
 		servers,
 		codec,
+		benchmarkPriceDecoder,
 		triggerCapability,
 		feedID,
 		jobID,
@@ -440,7 +446,7 @@ func (mt *mercuryTransmitter) Transmit(ctx context.Context, reportCtx ocrtypes.R
 		Payload: payload,
 	}
 
-	ts, err := mt.codec.ObservationTimestampFromReport(report)
+	ts, err := mt.codec.ObservationTimestampFromReport(ctx, report)
 	if err != nil {
 		mt.lggr.Warnw("Failed to get observation timestamp from report", "err", err)
 	}
@@ -466,7 +472,7 @@ func (mt *mercuryTransmitter) Transmit(ctx context.Context, reportCtx ocrtypes.R
 }
 
 // FromAccount returns the stringified (hex) CSA public key
-func (mt *mercuryTransmitter) FromAccount() (ocrtypes.Account, error) {
+func (mt *mercuryTransmitter) FromAccount(ctx context.Context) (ocrtypes.Account, error) {
 	return ocrtypes.Account(mt.fromAccount), nil
 }
 
@@ -512,7 +518,7 @@ func (mt *mercuryTransmitter) LatestPrice(ctx context.Context, feedID [32]byte) 
 	if !is {
 		return nil, fmt.Errorf("expected report to be []byte, but it was %T", m["report"])
 	}
-	return mt.codec.BenchmarkPriceFromReport(report)
+	return mt.benchmarkPriceDecoder(ctx, feedID, report)
 }
 
 // LatestTimestamp will return -1, nil if the feed is missing
@@ -565,7 +571,7 @@ func (mt *mercuryTransmitter) latestReport(ctx context.Context, feedID [32]byte)
 			if resp.Report == nil {
 				s.lggr.Tracew("latestReport success: returned nil")
 			} else if !bytes.Equal(resp.Report.FeedId, feedID[:]) {
-				err = fmt.Errorf("latestReport failed; mismatched feed IDs, expected: 0x%x, got: 0x%x", mt.feedID[:], resp.Report.FeedId[:])
+				err = fmt.Errorf("latestReport failed; mismatched feed IDs, expected: 0x%x, got: 0x%x", mt.feedID[:], resp.Report.FeedId)
 				s.lggr.Errorw("latestReport failed", "err", err)
 				return err
 			} else {
